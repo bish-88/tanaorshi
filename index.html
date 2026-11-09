@@ -77,6 +77,8 @@ svg text{fill:var(--text-2);font-size:11px;font-family:inherit}
 .matrix td.l,.matrix th.l{position:sticky;left:0;background:var(--surface);z-index:1}
 .matrix th.l{z-index:2}
 .hidden{display:none}
+.reportbox{margin-top:12px}
+.reportbox select{max-width:100%}
 @media (max-width:520px){.storebar .wide{display:none}.storebar{gap:6px}}
 .storebar{flex-wrap:nowrap;position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 0}
 .storebar select{flex:1;min-width:0;max-width:420px;font-size:16px;padding:8px 10px}
@@ -98,6 +100,12 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
     <small>ファイルはこのブラウザの中だけで処理され、どこにも送信されません</small>
   </label>
   <div class="err" id="err"></div>
+  <div class="filters reportbox hidden" id="reportBox">
+    <label for="reportSel" class="note" style="font-size:13px">表示するレポート</label>
+    <select id="reportSel"></select>
+    <button class="btn ghost" id="delReport">このレポートを消す</button>
+    <span class="note" id="saveMsg"></span>
+  </div>
 
   <div id="app" class="hidden">
     <div class="meta">
@@ -152,8 +160,10 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
           <li><b>総平均法（原価）</b>：ファストフーズ・店内厨房の「（推定在庫数 − 実地棚卸在庫数）× 前月平均単価」。レポートの <b>SH 総平均合計</b> の数字です。</li>
           <li>売価と原価で基準がちがうため、2つは足さずに別々に表示しています。</li>
           <li><b>プラス</b>＝ロス（帳簿より在庫が少ない）、<b>マイナス</b>＝益（帳簿より在庫が多い）。</li>
-          <li><b>ロス率</b>はレポートに入っている最新回の数字（%）です。</li>
-          <li>売価還元合計が 0 の回は「実施なし」として扱い、前回比・過去平均の計算から外しています。</li>
+          <li><b>ロス率</b>はレポートに入っている最新回の数字です（Excelと同じ表示）。</li>
+          <li>店舗合計が 0 でも部門ごとに数字がある回は「実施した回」です（部門のプラスとマイナスで合計が0）。部門別の表で中身を見られます。</li>
+          <li>部門の数字もすべて 0 の回だけを「実施なし」として、前回比・過去平均の計算から外しています。</li>
+          <li>読み込んだデータはこのブラウザに保存されるので、次からはExcelをアップロードしなくても見られます。新しいレポートが出たら、そのExcelを読み込めば更新されます。</li>
           <li><b>1日あたり</b>＝今回ロス ÷ 前回棚卸からの日数。間隔がちがう店舗どうしを比べるときに使います。</li>
         </ul>
       </div>
@@ -168,7 +178,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
 const $=s=>document.querySelector(s);
 const yen=v=>v==null||isNaN(v)?"—":(v<0?"−":"")+"¥"+Math.round(Math.abs(v)).toLocaleString("ja-JP");
 const num=v=>v==null||isNaN(v)?"—":(v<0?"−":"")+Math.round(Math.abs(v)).toLocaleString("ja-JP");
-const pct=v=>v==null||isNaN(v)?"—":(v<0?"−":"")+Math.abs(v).toFixed(2)+"%";
+const pct=v=>v==null||isNaN(v)?"—":(v<0?"−":"")+(Math.abs(v)*100).toFixed(1)+"%";
 const cls=v=>v==null||isNaN(v)||v===0?"":(v>0?"pos":"neg");
 const fmtD=d=>d?`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`:"—";
 const fmtShort=d=>d?`${String(d.getFullYear()).slice(2)}/${d.getMonth()+1}/${d.getDate()}`:"";
@@ -189,9 +199,12 @@ function load(f){
   r.onload=e=>{
     try{
       const wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
-      DATA=parse(wb,f.name);
-      selected=null;
+      const rep=extract(wb,f.name);
+      DATA=parseRows(rep);          // 形式チェックをかねて先に解析
+      const ok=saveReport(rep);
+      CUR=rep.id;
       render();
+      $("#saveMsg").textContent=ok?"このブラウザに保存しました。次からはアップロードしなくても見られます。":"※このブラウザには保存できませんでした（容量やプライベートモードのため）。";
     }catch(err){
       console.error(err);
       $("#err").textContent="読み込めませんでした："+err.message;
@@ -200,11 +213,45 @@ function load(f){
   r.readAsArrayBuffer(f);
 }
 
+// ---------- 保存（このブラウザのlocalStorage） ----------
+const KEY="tana_reports_v1", MAXREP=12;
+let CUR=null;
+function readStore(){try{const j=JSON.parse(localStorage.getItem(KEY)||"[]");return Array.isArray(j)?j:[]}catch(e){return[]}}
+function writeStore(list){
+  while(list.length){
+    try{localStorage.setItem(KEY,JSON.stringify(list));return true}
+    catch(e){ if(list.length<=1) return false; list.pop(); }  // 容量オーバー → 古いものから消す
+  }
+  try{localStorage.removeItem(KEY)}catch(e){}
+  return true;
+}
+function saveReport(rep){
+  const list=readStore().filter(x=>x.id!==rep.id);
+  list.push(rep);
+  list.sort((a,b)=>b.rdate-a.rdate||b.savedAt-a.savedAt);
+  return writeStore(list.slice(0,MAXREP));
+}
+function refreshReportSel(){
+  const list=readStore();
+  const sel=$("#reportSel");
+  if(!list.length){sel.innerHTML="";$("#reportBox").classList.add("hidden");return}
+  $("#reportBox").classList.remove("hidden");
+  sel.innerHTML=list.map((x,i)=>`<option value="${esc(x.id)}">${fmtD(new Date(x.rdate))} 作成${i===0?"（最新）":""}　${esc(x.fname)}</option>`).join("");
+  if(CUR) sel.value=CUR;
+}
+function openReport(id){
+  const rep=readStore().find(x=>x.id===id); if(!rep) return false;
+  try{DATA=parseRows(rep);CUR=rep.id;render();return true}catch(e){console.error(e);return false}
+}
+
 // ---------- parse ----------
-function parse(wb,fname){
+// Excel → 保存用データ（必要なシートの行だけ）
+function extract(wb,fname){
   const sn=wb.SheetNames.find(n=>/^ITEMDATA/i.test(n));
   if(!sn) throw new Error("「ITEMDATA_…」シートが見つかりません。棚卸ロス分析レポートのファイルか確認してください。");
-  const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:""});
+  const all=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:""});
+  // 使う列だけ・空行なし（保存サイズを小さく）
+  const rows=all.filter(r=>String(r[0]).trim()&&String(r[2]).trim()).map(r=>{let e=r.length;while(e>0&&r[e-1]==="")e--;return r.slice(0,e)});
 
   // report date
   let rdate=null;
@@ -212,6 +259,12 @@ function parse(wb,fname){
   if(st&&st["C1"]&&typeof st["C1"].v==="number"){const p=XLSX.SSF.parse_date_code(st["C1"].v);rdate=new Date(p.y,p.m-1,p.d)}
   if(!rdate){const m=fname.match(/(20\d{2})(\d{2})(\d{2})/);if(m)rdate=new Date(+m[1],+m[2]-1,+m[3])}
   if(!rdate) rdate=new Date();
+  return {id:fmtD(rdate)+"|"+fname,fname,rdate:rdate.getTime(),savedAt:Date.now(),rows};
+}
+
+// 保存用データ → 画面用データ
+function parseRows(rep){
+  const rows=rep.rows, rdate=new Date(rep.rdate), fname=rep.fname;
 
   // 期間数 = 4列目から最初の数値セルまでの列数（日付列の数）
   const cnt={};
@@ -253,9 +306,10 @@ function parse(wb,fname){
     }
     const bk=s.depts.get("BK"), sh=s.depts.get("SH");
     const deptList=[...s.depts.values()].filter(d=>d.code!=="BK"&&d.code!=="SH");
-    // BK executed per period: any non-zero dept among 売価還元 depts
-    // 売価還元の実施判定：BK合計が0以外（BK行がなければ部門のどれかが0以外）
-    const bkDone=periods.map((p,i)=>!!p&&(s.depts.get("BK")?!!s.depts.get("BK").amts[i]:deptList.some(d=>!shDepts.has(d.code)&&d.amts[i])));
+    // 売価還元の実施判定：BK合計 または 部門のどれかが0以外なら「実施」
+    // （部門ごとの差はあるが合計がちょうど0になる回があるため）
+    const bkDone=periods.map((p,i)=>!!p&&(!!(bk&&bk.amts[i])||deptList.some(d=>!shDepts.has(d.code)&&d.amts[i])));
+    const bkOffset=periods.map((p,i)=>bkDone[i]&&!(bk&&bk.amts[i]));
     const shDone=periods.map((p,i)=>!!p);
     const bkVals=bk?bk.amts:Array(n).fill(null), shVals=sh?sh.amts:Array(n).fill(null);
     const last=n-1;
@@ -266,7 +320,7 @@ function parse(wb,fname){
     const avg=(arr,idx)=>idx.length?idx.reduce((a,i)=>a+(arr[i]||0),0)/idx.length:null;
     const latestP=periods[last];
     out.push({
-      code:s.code,name:s.name,periods,bkDone,shDone,bkVals,shVals,depts:deptList,
+      code:s.code,name:s.name,periods,bkDone,bkOffset,shDone,bkVals,shVals,depts:deptList,
       date:latestP&&latestP.date, days:latestP&&latestP.days,
       bkNow:bkDone[last]?bkVals[last]:null,
       bkRate:bkDone[last]&&bk?bk.rate:null,
@@ -291,6 +345,8 @@ function parse(wb,fname){
 function render(){
   $("#app").classList.remove("hidden");
   drop.querySelector("strong").textContent="別のファイルを読み込む（ドラッグ または クリック）";
+  refreshReportSel();
+  $("#saveMsg").textContent="";
   $("#mFile").textContent="ファイル："+DATA.file;
   $("#mDate").textContent="レポート作成日："+fmtD(DATA.rdate);
   $("#mCount").textContent="店舗数："+DATA.stores.length;
@@ -345,7 +401,7 @@ function renderTable(){
     let bkCell;
     if(s.bkNow!=null){
       const w=Math.round(Math.abs(s.bkNow)/maxBk*60);
-      bkCell=`<span class="${cls(s.bkNow)}">${yen(s.bkNow)}</span> <span class="bar" style="width:${w}px;background:${s.bkNow>=0?"var(--loss)":"var(--gain)"}"></span>`;
+      bkCell=`<span class="${cls(s.bkNow)}">${yen(s.bkNow)}</span> <span class="bar" style="width:${w}px;background:${s.bkNow>=0?"var(--loss)":"var(--gain)"}"></span>`+(s.bkOffset[DATA.n-1]?`<br><small class="na">合計0（部門ごとの差あり）</small>`:"");
     }else{
       bkCell=`<span class="na">今回なし</span>`+(s.bkLast!=null?`<br><small class="na">前回実施 ${fmtShort(s.periods[s.bkLastIdx].date)}：${yen(s.bkLast)}</small>`:"");
     }
@@ -400,7 +456,7 @@ function renderDetail(){
   $("#detail").innerHTML=`
   <div class="card" id="detailCard">
     <h2>${esc(s.code)} ${esc(s.name)}${rankLabel(s)}</h2>
-    <p class="note">今回棚卸日 ${fmtD(s.date)}（前回から ${s.days??"—"}日）${s.bkNow==null?`／売価還元は今回実施なし。部門別は直近実施 ${usedLabel} の数字`:""}</p>
+    <p class="note">今回棚卸日 ${fmtD(s.date)}（前回から ${s.days??"—"}日）${s.bkOffset[n-1]?"／売価還元の店舗合計は0ですが、部門ごとにはロス・益が出ています（下の部門別を見てください）":""}${s.bkNow==null?`／売価還元は今回実施なし。部門別は直近実施 ${usedLabel} の数字`:""}</p>
     <div class="kpis">
       <div class="kpi"><div class="l">売価還元ロス（${s.bkNow!=null?"今回":"直近実施 "+usedLabel}）</div><div class="v ${cls(s.bkNow??s.bkLast)}">${yen(s.bkNow??s.bkLast)}</div><div class="n">ロス率 ${pct(s.bkRate)}　過去平均 ${yen(s.bkAvg)}（${s.bkCount}回）</div></div>
       <div class="kpi"><div class="l">総平均ロス（今回・原価）</div><div class="v ${cls(s.shNow)}">${yen(s.shNow)}</div><div class="n">ロス率 ${pct(s.shRate)}　過去平均 ${yen(s.shAvg)}</div></div>
@@ -464,9 +520,11 @@ function barChart(el,periods,vals,done){
       g+=`<path d="${path}" fill="${c}"/>`;
     }else if(v==null||!done[i]){
       g+=`<text x="${cx}" y="${y(0)-6}" text-anchor="middle" class="na">実施なし</text>`;
+    }else{
+      g+=`<text x="${cx}" y="${y(0)-6}" text-anchor="middle">合計0</text>`;
     }
     g+=`<text x="${cx}" y="${H-mb+14}" text-anchor="middle">${fmtShort(p.date)}</text><text x="${cx}" y="${H-mb+27}" text-anchor="middle" style="font-size:10px">${p.days}日</text>`;
-    const tipHtml=`<b>${fmtD(p.date)}</b>（${p.days}日間）<br>`+(done[i]?`${v>0?"ロス":v<0?"益":""} ${yen(v)}<br>1日あたり ${yen(v/p.days)}`:"実施なし");
+    const tipHtml=`<b>${fmtD(p.date)}</b>（${p.days}日間）<br>`+(done[i]?(v===0?"合計 ¥0（部門ごとの差はあり）":`${v>0?"ロス":v<0?"益":""} ${yen(v)}<br>1日あたり ${yen(v/p.days)}`):"実施なし");
     g+=`<rect x="${x}" y="${mt}" width="${bw}" height="${H-mt-mb+30}" fill="transparent" data-tip="${esc(tipHtml)}"/>`;
   });
   g+="</svg>";
@@ -534,6 +592,19 @@ $("#csv").onclick=()=>{
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);
   a.download="棚卸ロス_店舗別_"+fmtD(DATA.rdate).replace(/\//g,"")+".csv";a.click();
 };
+// ---------- 起動時：保存データがあればそのまま表示 ----------
+$("#reportSel").addEventListener("change",e=>openReport(e.target.value));
+$("#delReport").onclick=()=>{
+  if(!CUR) return;
+  writeStore(readStore().filter(x=>x.id!==CUR));
+  const rest=readStore();
+  if(rest.length) openReport(rest[0].id);
+  else{CUR=null;DATA=null;$("#app").classList.add("hidden");$("#reportBox").classList.add("hidden");drop.querySelector("strong").textContent="ここにExcelファイルをドラッグ、またはクリックして選択"}
+};
+(function start(){
+  const list=readStore();
+  if(list.length&&openReport(list[0].id)) $("#saveMsg").textContent="保存してあるデータを表示しています。";
+})();
 })();
 </script>
 </body>
