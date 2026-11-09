@@ -77,7 +77,7 @@ svg text{fill:var(--text-2);font-size:11px;font-family:inherit}
 .matrix td.l,.matrix th.l{position:sticky;left:0;background:var(--surface);z-index:1}
 .matrix th.l{z-index:2}
 .hidden{display:none!important}
-.insights{margin:0;padding-left:20px}.insights li{margin:0 0 8px}
+.insights{margin:0;padding-left:20px}.insights ul{margin:6px 0 0;padding-left:18px}.insights ul li{margin:0 0 4px}.insights li{margin:0 0 8px}
 .lv{display:inline-block;min-width:24px;text-align:center;border-radius:6px;padding:0 6px;font-weight:700;font-size:12px}
 .lv-高{background:var(--loss);color:#fff}.lv-中{background:var(--loss-bg);color:var(--text)}.lv-低{background:var(--surface-2);color:var(--text-2)}
 .tag.t-急増{background:var(--loss);color:#fff;border-color:transparent}
@@ -142,6 +142,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
     <div class="tabs">
       <button class="tab on" data-tab="stores">店舗一覧</button>
       <button class="tab" data-tab="analysis">分析</button>
+      <button class="tab" data-tab="season">季節</button>
       <button class="tab" data-tab="store">店舗別</button>
       <button class="tab" data-tab="matrix">部門 × 店舗</button>
       <button class="tab" data-tab="help">見かた</button>
@@ -156,6 +157,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
     </section>
 
     <section id="t-analysis" class="hidden"></section>
+    <section id="t-season" class="hidden"></section>
 
     <section id="t-store" class="hidden">
       <div class="filters storebar">
@@ -405,7 +407,7 @@ function render(){
   $("#mFile").textContent="";
   $("#mDate").textContent="レポート作成日："+fmtD(DATA.rdate);
   $("#mCount").textContent="店舗数："+DATA.stores.length;
-  renderKpis(); renderTable(); renderMatrix(); renderAnalysis();
+  renderKpis(); renderTable(); renderMatrix(); renderAnalysis(); renderSeason();
   const list=DATA.stores.slice().sort((a,b)=>a.code.localeCompare(b.code));
   $("#storeSel").innerHTML=list.map(x=>`<option value="${esc(x.code)}">${esc(x.code)} ${esc(x.name)}</option>`).join("");
   let saved=null; try{saved=localStorage.getItem("tana_store")}catch(e){}
@@ -611,7 +613,7 @@ $("#hideZero").addEventListener("change",()=>DATA&&renderMatrix());
 // ---------- tabs ----------
 function showTab(name){
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x.dataset.tab===name));
-  ["stores","analysis","store","matrix","help"].forEach(t=>$("#t-"+t).classList.toggle("hidden",t!==name));
+  ["stores","analysis","season","store","matrix","help"].forEach(t=>$("#t-"+t).classList.toggle("hidden",t!==name));
 }
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
@@ -826,6 +828,105 @@ function scatterChart(el,L){
   }
   el.innerHTML=g+"</svg>";
   el.querySelectorAll("circle[data-tip]").forEach(c=>{c.addEventListener("mousemove",e=>showTip(e,c.dataset.tip));c.addEventListener("mouseleave",hideTip);c.addEventListener("click",()=>{hideTip();selectStore(c.dataset.c);showTab("store")})});
+}
+
+// ---------- 季節（月）分析 ----------
+// 方法：①各棚卸期間の1日あたりロスを、その期間にふくまれる月に日数で按分 → 月別の目安
+//      ②120日以下の期間だけ使い、店ごとの平均を引いた残差を「期間の真ん中の季節」で比べる
+//        → 並べ替え検定（2000回）＋ Benjamini-Hochberg で多重比較を補正
+const SEASONS=["冬(12-2月)","春(3-5月)","夏(6-8月)","秋(9-11月)"];
+const seasonOf=d=>[0,0,1,1,1,2,2,2,3,3,3,0][d.getMonth()];
+function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function seasonal(D){
+  const isSh=c=>c==="05"||c==="06", DAY=864e5;
+  const obs=new Map();          // dept -> [{store,start,end,daily,mcount}]
+  for(const s of D.stores){
+    let prev=null;
+    for(let i=0;i<D.n;i++){
+      const p=s.periods[i]; if(!p||!s.bkDone[i]) continue;
+      const end=p.date, start=prev||new Date(end.getTime()-p.days*DAY); prev=end;
+      const days=Math.round((end-start)/DAY); if(days<=0) continue;
+      const mc=new Array(12).fill(0);
+      for(let t=start.getTime()+DAY;t<=end.getTime();t+=DAY) mc[new Date(t).getMonth()]++;
+      const mid=new Date((start.getTime()+end.getTime())/2);
+      for(const d of s.depts){
+        if(isSh(d.code)) continue;
+        const v=d.amts[i]; if(typeof v!=="number") continue;
+        if(!obs.has(d.code)) obs.set(d.code,{code:d.code,name:d.name,list:[]});
+        obs.get(d.code).list.push({store:s.code,daily:v/days,days,mc,season:seasonOf(mid)});
+      }
+    }
+  }
+  const out=[], R=rng(20261108);
+  for(const g of obs.values()){
+    // ① 月別（1店あたり・1か月あたり）
+    const num=new Array(12).fill(0), den=new Array(12).fill(0);
+    for(const o of g.list) for(let m=0;m<12;m++){num[m]+=o.daily*o.mc[m];den[m]+=o.mc[m]}
+    const month=num.map((x,m)=>den[m]?x/den[m]*30:null);
+    // ② 季節の検定
+    const short=g.list.filter(o=>o.days<=120);
+    let p=null, smean=null, n=short.length;
+    if(n>=30){
+      const by=new Map(); for(const o of short){if(!by.has(o.store))by.set(o.store,[]);by.get(o.store).push(o.daily)}
+      const mu=new Map([...by].map(([k,v])=>[k,mean(v)]));
+      const res=short.map(o=>(o.daily-mu.get(o.store))*30), lab=short.map(o=>o.season);
+      const all=mean(res);
+      const F=L=>{const sm=[0,0,0,0],c=[0,0,0,0];L.forEach((s,i)=>{sm[s]+=res[i];c[s]++});let f=0;for(let k=0;k<4;k++)if(c[k])f+=c[k]*(sm[k]/c[k]-all)**2;return[f,sm.map((x,k)=>c[k]?x/c[k]:null),c]};
+      const [f0,sm,c]=F(lab); smean=sm;
+      if(c.filter(x=>x>=5).length>=3){
+        const L=lab.slice(); let cnt=0; const N=2000;
+        for(let r=0;r<N;r++){for(let i=L.length-1;i>0;i--){const j=Math.floor(R()*(i+1));[L[i],L[j]]=[L[j],L[i]]}if(F(L)[0]>=f0)cnt++}
+        p=(cnt+1)/(N+1);
+      }
+    }
+    const total=month.reduce((a,x)=>a+Math.abs(x||0),0);
+    out.push({code:g.code,name:g.name,month,p,smean,n,total});
+  }
+  // Benjamini-Hochberg
+  const T=out.filter(x=>x.p!=null).sort((a,b)=>a.p-b.p), m=T.length; let prev=1;
+  for(let i=m-1;i>=0;i--){prev=Math.min(prev,T[i].p*m/(i+1));T[i].q=prev}
+  for(const x of out){
+    x.level=x.q==null?"—":x.q<0.05?"差あり":x.q<0.2?"傾向あり":"差なし";
+    if(x.smean){const v=x.smean.map((y,k)=>({y,k})).filter(o=>o.y!=null);v.sort((a,b)=>b.y-a.y);x.hi=v[0];x.lo=v[v.length-1];x.range=x.hi.y-x.lo.y}
+  }
+  return out;
+}
+
+function renderSeason(){
+  const S=seasonal(DATA);
+  const sig=S.filter(x=>x.level==="差あり").sort((a,b)=>a.q-b.q);
+  const tend=S.filter(x=>x.level==="傾向あり").sort((a,b)=>a.q-b.q);
+  const nm=x=>esc(x.name);
+  const desc=x=>`${nm(x)}：いつもとくらべて <b>${SEASONS[x.hi.k]}はロス側に +${yen(x.hi.y)}</b>、<b>${SEASONS[x.lo.k]}は益側に ${yen(x.lo.y)}</b>（1店・1か月あたり）`;
+  const shortN=Math.max(0,...S.map(x=>x.n));
+  // ヒートマップ：差あり・傾向ありを上に、その後は月別の動きが大きい部門
+  const rows=[...sig,...tend,...S.filter(x=>x.level!=="差あり"&&x.level!=="傾向あり").sort((a,b)=>b.total-a.total).slice(0,Math.max(0,20-sig.length-tend.length))];
+  const mx=Math.max(1,...rows.flatMap(x=>x.month.map(v=>Math.abs(v||0))));
+  const cell=v=>{if(v==null)return'<td class="na">—</td>';const a=Math.min(1,Math.sqrt(Math.abs(v)/mx));return `<td style="background:color-mix(in srgb, ${v>0?"var(--loss)":"var(--gain)"} ${Math.round(a*60)}%, transparent)" title="${yen(v)}／店・月">${num(v)}</td>`};
+  const badge=x=>x.level==="差あり"?'<span class="tag t-急増">差あり</span>':x.level==="傾向あり"?'<span class="tag t-慢性ロス">傾向あり</span>':'<span class="na">—</span>';
+  let hm=`<thead><tr><th class="l nosort">部門</th><th class="l nosort">季節の差</th>${[...Array(12)].map((_,m)=>`<th class="nosort">${m+1}月</th>`).join("")}</tr></thead><tbody>`+
+    rows.map(x=>`<tr><td class="l">${esc(x.code)} ${nm(x)}</td><td class="l">${badge(x)}</td>${x.month.map(cell).join("")}</tr>`).join("")+"</tbody>";
+  let tb=`<thead><tr><th class="l nosort">部門</th><th class="l nosort">判定</th><th class="l nosort">ロスが増える季節</th><th class="l nosort">少ない季節</th><th class="nosort">季節の差<br>(店・月)</th><th class="nosort">偶然の確率<br>(補正後)</th><th class="nosort">データ数</th></tr></thead><tbody>`+
+    S.filter(x=>x.q!=null).sort((a,b)=>a.q-b.q).map(x=>`<tr><td class="l">${esc(x.code)} ${nm(x)}</td><td class="l">${badge(x)}</td><td class="l">${x.hi?SEASONS[x.hi.k]+`　<span class="${cls(x.hi.y)}">${yen(x.hi.y)}</span>`:"—"}</td><td class="l">${x.lo?SEASONS[x.lo.k]+`　<span class="${cls(x.lo.y)}">${yen(x.lo.y)}</span>`:"—"}</td><td>${yen(x.range)}</td><td>${(x.q*100).toFixed(1)}%</td><td>${x.n}</td></tr>`).join("")+"</tbody>";
+  $("#t-season").innerHTML=`
+  <div class="card">
+    <h2>季節（月）によって、ロスが出る部門</h2>
+    <ol class="insights">
+      ${sig.length?`<li><b>季節によってロスがはっきり変わる部門：${sig.length}部門</b>（偶然では説明しにくい差）<ul>${sig.map(x=>`<li>${desc(x)}</li>`).join("")}</ul></li>`:`<li>今のデータでは、季節ではっきり差がある部門は見つかりませんでした。</li>`}
+      ${tend.length?`<li><b>傾向はあるが、まだ確実ではない部門：</b>${tend.map(x=>`${nm(x)}（${SEASONS[x.hi.k]}が多め）`).join("、")}。次の棚卸のデータがふえると、はっきりします。</li>`:""}
+      <li><b>使い方：</b>「差あり」の部門は、ロスが増える季節の前に、売場・検品・在庫の重点チェックをしてください。益が増える季節がある部門は、売れる量が多い時期に入数・検品・部門登録のミスがふえている可能性があります。</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h2>部門 × 月（1店・1か月あたりのロス、目安）</h2>
+    <p class="note">棚卸は3〜6か月ごとなので、その期間のロスを、ふくまれる月に日数でわけて重ねた「目安」です。赤＝ロス、青＝益。となりの月とはなだらかにつながって見えます。</p>
+    <div class="scroll" style="max-height:70vh"><table class="matrix">${hm}</table></div>
+  </div>
+  <div class="card">
+    <h2>季節の差の検定（全部門）</h2>
+    <p class="note">120日以下の棚卸期間（${shortN}回分）を、期間の真ん中の季節でわけて比べています。店ごとの差は引いてあります。「偶然の確率」は、季節に関係なくてもこれくらいの差が出る確率です（並べ替え検定・55部門分の補正後）。5%未満＝差あり、20%未満＝傾向あり。</p>
+    <div class="scroll" style="max-height:60vh"><table>${tb}</table></div>
+  </div>`;
 }
 
 // ---------- 起動時：保存データがあればそのまま表示 ----------
