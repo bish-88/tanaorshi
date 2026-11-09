@@ -1,5 +1,7 @@
 // 新しい棚卸ロス分析レポート(.xls)を data/data.enc に追加する（前のレポートは残す）
-// 使いかた:  TANA_PW='パスワード' node tools/update-data.mjs <レポート.xls> [もう1つ.xls ...]
+// 使いかた:  TANA_PW='パスワード' node tools/update-data.mjs [--names 店名.xlsx] <レポート.xls> [もう1つ.xls ...]
+//   --names : 1列目＝正式な店名、2列目＝短い店名 の Excel。指定すると全レポートの店名を短い名前にする
+//   一度短くした店名は店番で覚えているので、次からは --names なしでも短い名前になる
 //   ・xlsx パッケージが必要:  npm i xlsx@0.18.5  （このフォルダの外でも可。NODE_PATH で指定）
 //   ・パスワードはリポジトリに保存しない
 import fs from "node:fs";
@@ -10,8 +12,12 @@ const require = createRequire(import.meta.url);
 const XLSX = require("xlsx");
 
 const PW = process.env.TANA_PW;
-const files = process.argv.slice(2);
-if (!PW || !files.length) { console.error("TANA_PW='…' node tools/update-data.mjs file.xls"); process.exit(1); }
+const args = process.argv.slice(2);
+let namesFile = null;
+const ni = args.indexOf("--names");
+if (ni >= 0) { namesFile = args[ni + 1]; args.splice(ni, 2); }
+const files = args;
+if (!PW || (!files.length && !namesFile)) { console.error("TANA_PW='…' node tools/update-data.mjs file.xls"); process.exit(1); }
 const ENC = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "data", "data.enc");
 const ITER = 600000;
 
@@ -51,10 +57,25 @@ function extract(file) {
   return { id: fmtD(rdate) + "|" + fname, fname, rdate: rdate.getTime(), savedAt: Date.now(), rows };
 }
 
+// 正式名 → 短い名前
+const short = new Map();
+if (namesFile) {
+  const wb = XLSX.read(fs.readFileSync(namesFile), { type: "buffer" });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+  for (const r of rows.slice(1)) { const a = String(r[0]).trim(), b = String(r[1]).trim(); if (a && b) short.set(a, b); }
+  console.log(`店名の対応: ${short.size}件`);
+}
 let list = [];
 if (fs.existsSync(ENC)) list = await decrypt(JSON.parse(fs.readFileSync(ENC, "utf8")), PW); // パスワードがちがうとここで失敗
+// 店番 → いま使っている店名（前回までのレポートから）
+const byCode = new Map();
+for (const rep of list.slice().sort((a, b) => a.rdate - b.rdate)) for (const r of rep.rows) byCode.set(String(r[0]).trim(), String(r[1]).trim());
+const rename = rep => { for (const r of rep.rows) { const code = String(r[0]).trim(), nm = String(r[1]).trim(); r[1] = short.get(nm) ?? byCode.get(code) ?? nm; if (short.has(nm)) byCode.set(code, r[1]); } };
+// 短い名前を全部のレポートにあてはめる
+if (short.size) for (const rep of list) for (const r of rep.rows) { const nm = String(r[1]).trim(); if (short.has(nm)) { r[1] = short.get(nm); byCode.set(String(r[0]).trim(), r[1]); } }
 for (const f of files) {
   const rep = extract(f);
+  rename(rep);
   list = list.filter(x => x.id !== rep.id && fmtD(new Date(x.rdate)) !== fmtD(new Date(rep.rdate)));
   list.push(rep);
   console.log(`追加: ${fmtD(new Date(rep.rdate))}  ${rep.fname}  (${rep.rows.length}行)`);
