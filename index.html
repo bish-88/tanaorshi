@@ -77,6 +77,16 @@ svg text{fill:var(--text-2);font-size:11px;font-family:inherit}
 .matrix td.l,.matrix th.l{position:sticky;left:0;background:var(--surface);z-index:1}
 .matrix th.l{z-index:2}
 .hidden{display:none!important}
+.insights{margin:0;padding-left:20px}.insights li{margin:0 0 8px}
+.lv{display:inline-block;min-width:24px;text-align:center;border-radius:6px;padding:0 6px;font-weight:700;font-size:12px}
+.lv-高{background:var(--loss);color:#fff}.lv-中{background:var(--loss-bg);color:var(--text)}.lv-低{background:var(--surface-2);color:var(--text-2)}
+.tag.t-急増{background:var(--loss);color:#fff;border-color:transparent}
+.tag.t-不明部門{background:var(--surface-2);color:var(--text);border-color:var(--text-2)}
+.tag.t-慢性ロス{background:var(--loss-bg);color:var(--text);border-color:transparent}
+.tag.t-慢性益{background:var(--gain-bg);color:var(--text);border-color:transparent}
+.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:4px 16px;margin:0 0 10px;font-size:12px;color:var(--text-2)}
+.legend div{display:flex;gap:6px;align-items:baseline}.legend .tag,.tag{white-space:nowrap}.legend dt,.legend dd{margin:0}
+.charts>.card{margin-bottom:16px}
 .reportbox{margin-top:12px}
 .lock{margin:0 0 12px}
 .lock input[type=password]{font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text);min-width:160px;flex:1;max-width:280px}
@@ -131,6 +141,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
 
     <div class="tabs">
       <button class="tab on" data-tab="stores">店舗一覧</button>
+      <button class="tab" data-tab="analysis">分析</button>
       <button class="tab" data-tab="store">店舗別</button>
       <button class="tab" data-tab="matrix">部門 × 店舗</button>
       <button class="tab" data-tab="help">見かた</button>
@@ -143,6 +154,8 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
         <div class="scroll"><table id="storeTable"></table></div>
       </div>
     </section>
+
+    <section id="t-analysis" class="hidden"></section>
 
     <section id="t-store" class="hidden">
       <div class="filters storebar">
@@ -191,6 +204,10 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
           <li>店舗合計が 0 でも部門ごとに数字がある回は「実施した回」です（部門のプラスとマイナスで合計が0）。部門別の表で中身を見られます。</li>
           <li>部門の数字もすべて 0 の回だけを「実施なし」として、前回比・過去平均の計算から外しています。</li>
           <li>読み込んだデータはこのブラウザに保存されるので、次からはExcelをアップロードしなくても見られます。新しいレポートが出たら、そのExcelを読み込めば更新されます。</li>
+          <li><b>年換算ロス</b>＝実施した回のロス合計 ÷ その期間の日数 × 365。売価還元をしなかった回をまたぐ日数も足しています。</li>
+          <li><b>傾向</b>＝直近2回の年換算 − それより前の回の年換算。プラスは悪化。</li>
+          <li><b>急増</b>＝今回が自分の店のいつもの平均より 2σ（標準偏差の2倍）以上多く、かつ ¥20,000 以上。</li>
+          <li><b>慢性ロス／慢性益</b>＝4回以上実施のうち 75%以上でロス（益）、かつ年換算 ¥20,000 以上。</li>
           <li><b>1日あたり</b>＝今回ロス ÷ 前回棚卸からの日数。間隔がちがう店舗どうしを比べるときに使います。</li>
         </ul>
       </div>
@@ -346,6 +363,8 @@ function parseRows(rep){
     // （部門ごとの差はあるが合計がちょうど0になる回があるため）
     const bkDone=periods.map((p,i)=>!!p&&(!!(bk&&bk.amts[i])||deptList.some(d=>!shDepts.has(d.code)&&d.amts[i])));
     const bkOffset=periods.map((p,i)=>bkDone[i]&&!(bk&&bk.amts[i]));
+    // 売価還元の期間日数：前回「実施」した回からの日数（実施なしの回をまたぐ分も足す）
+    const bkDays=[];{let acc=0,started=false;for(let i=0;i<n;i++){const p=periods[i];if(!p){bkDays.push(null);continue}acc+=p.days;if(bkDone[i]){bkDays.push(started?acc:p.days);acc=0;started=true}else bkDays.push(null)}}
     const shDone=periods.map((p,i)=>!!p);
     const bkVals=bk?bk.amts:Array(n).fill(null), shVals=sh?sh.amts:Array(n).fill(null);
     const last=n-1;
@@ -356,7 +375,7 @@ function parseRows(rep){
     const avg=(arr,idx)=>idx.length?idx.reduce((a,i)=>a+(arr[i]||0),0)/idx.length:null;
     const latestP=periods[last];
     out.push({
-      code:s.code,name:s.name,periods,bkDone,bkOffset,shDone,bkVals,shVals,depts:deptList,
+      code:s.code,name:s.name,periods,bkDone,bkOffset,bkDays,shDone,bkVals,shVals,depts:deptList,
       date:latestP&&latestP.date, days:latestP&&latestP.days,
       bkNow:bkDone[last]?bkVals[last]:null,
       bkRate:bkDone[last]&&bk?bk.rate:null,
@@ -386,7 +405,7 @@ function render(){
   $("#mFile").textContent="ファイル："+DATA.file;
   $("#mDate").textContent="レポート作成日："+fmtD(DATA.rdate);
   $("#mCount").textContent="店舗数："+DATA.stores.length;
-  renderKpis(); renderTable(); renderMatrix();
+  renderKpis(); renderTable(); renderMatrix(); renderAnalysis();
   const list=DATA.stores.slice().sort((a,b)=>a.code.localeCompare(b.code));
   $("#storeSel").innerHTML=list.map(x=>`<option value="${esc(x.code)}">${esc(x.code)} ${esc(x.name)}</option>`).join("");
   let saved=null; try{saved=localStorage.getItem("tana_store")}catch(e){}
@@ -592,7 +611,7 @@ $("#hideZero").addEventListener("change",()=>DATA&&renderMatrix());
 // ---------- tabs ----------
 function showTab(name){
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x.dataset.tab===name));
-  ["stores","store","matrix","help"].forEach(t=>$("#t-"+t).classList.toggle("hidden",t!==name));
+  ["stores","analysis","store","matrix","help"].forEach(t=>$("#t-"+t).classList.toggle("hidden",t!==name));
 }
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
 
@@ -628,6 +647,187 @@ $("#csv").onclick=()=>{
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);
   a.download="棚卸ロス_店舗別_"+fmtD(DATA.rdate).replace(/\//g,"")+".csv";a.click();
 };
+// ---------- 分析（ANALYSIS.md の計画にそって計算） ----------
+const TH={chronicShare:0.75,minRuns:4,chronicAnn:20000,spikeZ:2,spikeMin:20000,unknownMin:20000};
+const mean=a=>a.reduce((x,y)=>x+y,0)/a.length;
+const sd=a=>{const m=mean(a);return Math.sqrt(mean(a.map(x=>(x-m)**2)))};
+function analyze(D){
+  const last=D.n-1, isSh=c=>c==="05"||c==="06";
+  const stores=[], alerts=[], dept=new Map();
+  for(const s of D.stores){
+    const idx=s.bkDone.map((v,i)=>v&&s.bkDays[i]?i:-1).filter(i=>i>=0);
+    const totDays=idx.reduce((a,i)=>a+s.bkDays[i],0);
+    const ann=totDays?idx.reduce((a,i)=>a+(s.bkVals[i]||0),0)/totDays*365:null;
+    const daily=idx.map(i=>(s.bkVals[i]||0)/s.bkDays[i]*365);
+    const recent=daily.length?mean(daily.slice(-2)):null;
+    const older=daily.length>2?mean(daily.slice(0,-2)):null;
+    const trend=older!=null?recent-older:null;
+    const shIdx=s.shDone.map((v,i)=>v&&s.periods[i]?i:-1).filter(i=>i>=0);
+    const shDays=shIdx.reduce((a,i)=>a+s.periods[i].days,0);
+    const shAnn=shDays?shIdx.reduce((a,i)=>a+(s.shVals[i]||0),0)/shDays*365:null;
+    let chronic=0,gain=0,spike=0,gross=0;
+    for(const d of s.depts){
+      if(isSh(d.code)) continue;
+      const vals=idx.map(i=>d.amts[i]).filter(v=>typeof v==="number");
+      if(!vals.length) continue;
+      const dAnn=totDays?vals.reduce((a,v)=>a+v,0)/totDays*365:0;
+      if(!dept.has(d.code)) dept.set(d.code,{code:d.code,name:d.name,ann:0,lossStores:0,gainStores:0,chronic:0,chronicGain:0});
+      const g=dept.get(d.code); g.ann+=dAnn; if(dAnn>0)g.lossStores++; else if(dAnn<0)g.gainStores++;
+      if(dAnn>0) gross+=dAnn;
+      const lastV=s.bkDone[last]?d.amts[last]:null;
+      if(vals.length>=TH.minRuns){
+        const pos=vals.filter(v=>v>0).length/vals.length, neg=vals.filter(v=>v<0).length/vals.length;
+        if(pos>=TH.chronicShare&&dAnn>=TH.chronicAnn){chronic++;g.chronic++;alerts.push({type:"慢性ロス",s,d,impact:dAnn,latest:lastV,detail:`${vals.length}回中${vals.filter(v=>v>0).length}回ロス・年換算 ${yen(dAnn)}`})}
+        if(neg>=TH.chronicShare&&dAnn<=-TH.chronicAnn){gain++;g.chronicGain++;alerts.push({type:"慢性益",s,d,impact:dAnn,latest:lastV,detail:`${vals.length}回中${vals.filter(v=>v<0).length}回益・年換算 ${yen(dAnn)}`})}
+      }
+      if(lastV!=null){
+        const hist=idx.filter(i=>i<last).map(i=>d.amts[i]).filter(v=>typeof v==="number");
+        if(hist.length>=3){
+          const sdv=sd(hist), z=sdv?(lastV-mean(hist))/sdv:0;
+          if(z>=TH.spikeZ&&lastV>=TH.spikeMin){spike++;alerts.push({type:"急増",s,d,impact:lastV-mean(hist),latest:lastV,detail:`いつもの平均 ${yen(mean(hist))} → 今回 ${yen(lastV)}（${z.toFixed(1)}σ）`})}
+        }
+        if(d.code==="89"&&Math.abs(lastV)>=TH.unknownMin) alerts.push({type:"不明部門",s,d,impact:Math.abs(lastV),latest:lastV,detail:"部門がわからない差。商品登録・マスタの確認を"});
+      }
+    }
+    stores.push({s,ann,recent,older,trend,shAnn,chronic,gain,spike,gross,runs:idx.length});
+  }
+  // 優先度：年換算順位50%・悪化30%・要注意件数20%
+  const rk=(arr,key)=>{const L=arr.filter(x=>x[key]!=null).sort((a,b)=>a[key]-b[key]);const m=new Map();L.forEach((x,i)=>m.set(x,L.length>1?i/(L.length-1):1));return m};
+  stores.forEach(x=>x.flags=x.chronic+x.spike);
+  const rA=rk(stores,"ann"), rT=rk(stores,"trend"), rF=rk(stores,"flags");
+  stores.forEach(x=>x.score=Math.round(100*(0.5*(rA.get(x)??0)+0.3*(rT.get(x)??0.5)+0.2*(rF.get(x)??0))));
+  const sorted=stores.slice().sort((a,b)=>b.score-a.score);
+  const q=sorted[Math.floor(sorted.length*0.25)-1]?.score??100;
+  stores.forEach(x=>x.level=x.score>=q?"高":x.score>=50?"中":"低");
+  const depts=[...dept.values()].sort((a,b)=>b.ann-a.ann);
+  const lossTot=depts.filter(d=>d.ann>0).reduce((a,d)=>a+d.ann,0);
+  let cum=0; depts.forEach(d=>{if(d.ann>0){cum+=d.ann;d.cum=cum/lossTot}});
+  const order={"急増":0,"不明部門":1,"慢性ロス":2,"慢性益":3};
+  alerts.sort((a,b)=>Math.abs(b.impact)-Math.abs(a.impact));
+  return {stores:sorted,alerts,depts,lossTot,
+    chainAnn:stores.reduce((a,x)=>a+(x.ann||0),0), chainSh:stores.reduce((a,x)=>a+(x.shAnn||0),0),
+    gainTot:depts.filter(d=>d.ann<0).reduce((a,d)=>a+d.ann,0)};
+}
+
+function renderAnalysis(){
+  const A=analyze(DATA);
+  const top4=A.depts.filter(d=>d.ann>0).slice(0,4);
+  const top4share=top4.length?top4[top4.length-1].cum:0;
+  const gainTop=A.depts.slice().sort((a,b)=>a.ann-b.ann)[0];
+  const worst=A.stores.slice().sort((a,b)=>b.ann-a.ann).slice(0,3);
+  const worsen=A.stores.filter(x=>x.trend!=null&&x.trend>0).sort((a,b)=>b.trend-a.trend).slice(0,3);
+  const spikes=A.alerts.filter(a=>a.type==="急増"&&a.d.code!=="89").sort((x,y)=>y.latest-x.latest).slice(0,3);
+  const unknown=A.alerts.filter(a=>a.type==="不明部門").slice(0,3);
+  const nm=x=>esc(x.s.name);
+  const bullets=[
+    `<b>チェーン全体のロスは年換算 ${yen(A.chainAnn)}</b>（売価還元・${A.stores.length}店舗）。FF・店内厨房は年換算 ${yen(A.chainSh)}（原価）。店舗によって棚卸の間隔がちがうので、1年あたりにそろえた数字です。`,
+    gainTop&&gainTop.ann<0?`<b>本当の部門ロスは年 ${yen(A.lossTot)}</b>。でも「${esc(gainTop.name)}」が ${gainTop.gainStores}店舗で益になっていて（年 ${yen(gainTop.ann)}）、ほかの部門のロスを打ち消して小さく見せています。<b>${esc(gainTop.name)}の益は、ほかの部門の商品として売っている（部門ちがい登録）か、入数・検品のミスのことが多い</b>ので、まず原因を確認してください。`:"",
+    top4.length?`<b>ロスの ${Math.round(top4share*100)}% が ${top4.map(d=>esc(d.name)).join("・")} の4部門</b>に集中しています。小さくて値段が高い商品が多いので、盗難対策、レジ通し漏れ、売場の置き場所を重点的に見てください。`:"",
+    worst.length?`<b>年換算ロスが大きい店</b>：${worst.map(x=>`${nm(x)}（${yen(x.ann)}）`).join("、")}。`:"",
+    worsen.length?`<b>悪くなっている店</b>（直近2回 − それより前、年換算）：${worsen.map(x=>`${nm(x)}（+${yen(x.trend)}）`).join("、")}。`:"",
+    spikes.length?`<b>今回とくに急に増えたもの</b>：${spikes.map(a=>`${esc(a.s.name)}の${esc(a.d.name)}（${yen(a.latest)}）`).join("、")}。1回だけの数え間違いか、本当のロスか、まず確認してください。`:"",
+    unknown.length?`<b>「その他不明部門」の差が大きい店</b>：${unknown.map(a=>`${esc(a.s.name)}（${yen(a.latest)}）`).join("、")}。部門がわからない商品があるので、商品登録・マスタを確認してください。`:"",
+  ].filter(Boolean);
+
+  // スコアカード
+  const maxAnn=Math.max(1,...A.stores.map(x=>Math.abs(x.ann||0)));
+  let sc=`<thead><tr><th class="l nosort">優先度</th><th class="l nosort">店舗</th><th class="nosort">年換算ロス<br>(売価)</th><th class="nosort">傾向<br>(年換算の差)</th><th class="nosort">慢性ロス<br>部門</th><th class="nosort">今回<br>急増</th><th class="nosort">慢性益<br>部門</th><th class="nosort">FF年換算<br>(原価)</th><th class="nosort">回数</th></tr></thead><tbody>`;
+  for(const x of A.stores){
+    const tr=x.trend==null?'<span class="na">—</span>':`<span class="${cls(x.trend)}">${x.trend>0?"▲ 悪化 ":"▼ 改善 "}${yen(Math.abs(x.trend))}</span>`;
+    sc+=`<tr class="click" data-c="${esc(x.s.code)}"><td class="l"><span class="lv lv-${x.level}">${x.level}</span> <span class="na">${x.score}</span></td><td class="l">${esc(x.s.name)}</td>
+      <td><span class="${cls(x.ann)}">${yen(x.ann)}</span> <span class="bar" style="width:${Math.round(Math.abs(x.ann||0)/maxAnn*50)}px;background:${(x.ann||0)>=0?"var(--loss)":"var(--gain)"}"></span></td>
+      <td>${tr}</td><td>${x.chronic||'<span class="na">0</span>'}</td><td>${x.spike||'<span class="na">0</span>'}</td><td>${x.gain||'<span class="na">0</span>'}</td>
+      <td class="${cls(x.shAnn)}">${yen(x.shAnn)}</td><td>${x.runs}${x.runs<4?' <span class="tag">少ない</span>':""}</td></tr>`;
+  }
+  sc+="</tbody>";
+
+  // アラート
+  const types=["すべて","急増","不明部門","慢性ロス","慢性益"];
+  $("#t-analysis").innerHTML=`
+  <div class="card">
+    <h2>要点まとめ</h2>
+    <ol class="insights">${bullets.map(b=>`<li>${b}</li>`).join("")}</ol>
+    <p class="note">分析のルールは「見かた」タブの下と ANALYSIS.md に書いてあります。新しいExcelを読み込むと自動で計算し直します。</p>
+  </div>
+  <div class="card">
+    <h2>店舗スコアカード</h2>
+    <p class="note">優先度＝年換算ロスの大きさ 50%＋悪化 30%＋要注意の数 20%（0〜100）。「高」は上位25%。行をクリックすると店舗別へ移ります。</p>
+    <div class="scroll"><table id="scoreTable">${sc}</table></div>
+  </div>
+  <div class="charts">
+    <div class="card"><h2>部門パレート（チェーン全体・年換算ロス）</h2><p class="note">ロスの大きい部門から順に、上から何%までをしめるか。</p><div id="pareto"></div></div>
+    <div class="card"><h2>店舗ポジション</h2><p class="note">右ほどロスが大きい、上ほど悪化している。右上の店から手を打つ。</p><div id="scatter"></div></div>
+  </div>
+  <div class="card">
+    <h2>要注意リスト</h2>
+    <div class="filters">
+      <select id="alType" aria-label="種類">${types.map(t=>`<option>${t}</option>`).join("")}</select>
+      <select id="alStore" aria-label="店舗"><option value="">全店舗</option>${A.stores.slice().sort((a,b)=>a.s.code.localeCompare(b.s.code)).map(x=>`<option value="${esc(x.s.code)}">${esc(x.s.name)}</option>`).join("")}</select>
+      <span class="note" id="alCount"></span>
+    </div>
+    <dl class="legend">
+      <div><dt><span class="tag t-急増">急増</span></dt><dd>いつもより2σ以上多く、¥20,000以上。数え間違い or 盗難・事故</dd></div>
+      <div><dt><span class="tag t-不明部門">不明部門</span></dt><dd>89 その他不明部門の差が大きい。商品マスタ・登録の問題</dd></div>
+      <div><dt><span class="tag t-慢性ロス">慢性ロス</span></dt><dd>4回以上のうち75%以上でロス。仕組みの問題（盗難・廃棄登録漏れ）</dd></div>
+      <div><dt><span class="tag t-慢性益">慢性益</span></dt><dd>75%以上で益。部門ちがい登録・入数ミス・検品ミス</dd></div>
+    </dl>
+    <div class="scroll" style="max-height:60vh"><table id="alertTable"></table></div>
+  </div>`;
+  $("#scoreTable").querySelectorAll("tr.click").forEach(tr=>tr.onclick=()=>{selectStore(tr.dataset.c);showTab("store");window.scrollTo({top:document.querySelector(".tabs").offsetTop-8})});
+  const drawAlerts=()=>{
+    const t=$("#alType").value, st=$("#alStore").value;
+    const L=A.alerts.filter(a=>(t==="すべて"||a.type===t)&&(!st||a.s.code===st));
+    $("#alCount").textContent=`${L.length}件（金額の大きい順）`;
+    $("#alertTable").innerHTML=`<thead><tr><th class="l nosort">種類</th><th class="l nosort">店舗</th><th class="l nosort">部門</th><th class="nosort">今回</th><th class="nosort">影響額</th><th class="l nosort">中身</th></tr></thead><tbody>`+
+      L.slice(0,200).map(a=>`<tr><td class="l"><span class="tag t-${a.type}">${a.type}</span></td><td class="l">${esc(a.s.name)}</td><td class="l">${esc(a.d.code)} ${esc(a.d.name)}</td><td class="${cls(a.latest)}">${yen(a.latest)}</td><td class="${cls(a.impact)}">${yen(a.impact)}</td><td class="l note">${esc(a.detail)}</td></tr>`).join("")+"</tbody>";
+  };
+  $("#alType").onchange=drawAlerts; $("#alStore").onchange=drawAlerts; drawAlerts();
+  paretoChart($("#pareto"),A.depts.filter(d=>d.ann>0).slice(0,12));
+  scatterChart($("#scatter"),A.stores.filter(x=>x.ann!=null&&x.trend!=null));
+}
+
+function paretoChart(el,L){
+  const W=520,rowH=26,ml=150,mr=110,H=L.length*rowH+20;
+  const mx=niceMax(Math.max(...L.map(d=>d.ann)));
+  let g=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="部門パレート">`;
+  L.forEach((d,i)=>{
+    const y=i*rowH+4, w=Math.max(2,d.ann/mx*(W-ml-mr)), top4=d.cum<=0.5||i<4;
+    g+=`<text x="${ml-8}" y="${y+15}" text-anchor="end" style="fill:var(--text)">${esc(d.name)}</text>`;
+    g+=`<path d="M${ml},${y+3} H${ml+w-4} Q${ml+w},${y+3} ${ml+w},${y+7} V${y+17} Q${ml+w},${y+21} ${ml+w-4},${y+21} H${ml} Z" fill="var(--loss)" opacity="${top4?1:0.55}"/>`;
+    g+=`<text x="${ml+w+6}" y="${y+15}">${yen(d.ann)}　累計${Math.round(d.cum*100)}%</text>`;
+    g+=`<rect x="0" y="${y}" width="${W}" height="${rowH}" fill="transparent" data-tip="${esc(`<b>${d.code} ${d.name}</b><br>年換算ロス ${yen(d.ann)}<br>ロスの店 ${d.lossStores} / 益の店 ${d.gainStores}<br>慢性ロスの店 ${d.chronic}`)}"/>`;
+  });
+  el.innerHTML=g+"</svg>";
+  el.querySelectorAll("rect[data-tip]").forEach(r=>{r.addEventListener("mousemove",e=>showTip(e,r.dataset.tip));r.addEventListener("mouseleave",hideTip)});
+}
+
+function scatterChart(el,L){
+  const W=520,H=340,ml=64,mr=14,mt=14,mb=40;
+  const xs=L.map(x=>x.ann), ys=L.map(x=>x.trend);
+  const xr=[Math.min(0,...xs),Math.max(...xs)], yr=[Math.min(0,...ys),Math.max(0,...ys)];
+  const pad=(a,b)=>{const d=(b-a)||1;return[a-d*0.08,b+d*0.08]};
+  const [x0,x1]=pad(...xr),[y0,y1]=pad(...yr);
+  const X=v=>ml+(v-x0)/(x1-x0)*(W-ml-mr), Y=v=>mt+(y1-v)/(y1-y0)*(H-mt-mb);
+  const xm=mean(xs);
+  let g=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="店舗ポジション">`;
+  g+=`<rect x="${X(xm)}" y="${mt}" width="${W-mr-X(xm)}" height="${Y(0)-mt}" fill="var(--loss-bg)" opacity="0.6"/>`;
+  g+=`<text x="${X(xm)+6}" y="${mt+14}" style="font-weight:700">ロス大・悪化中</text>`;
+  g+=`<line x1="${ml}" x2="${W-mr}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--muted)"/><line x1="${X(xm)}" x2="${X(xm)}" y1="${mt}" y2="${H-mb}" stroke="var(--line)" stroke-dasharray="3 3"/>`;
+  g+=`<text x="${X(xm)+4}" y="${H-mb-4}" style="font-size:10px">平均</text>`;
+  g+=`<text x="${(ml+W-mr)/2}" y="${H-6}" text-anchor="middle">年換算ロス（売価） →</text>`;
+  g+=`<text x="${ml-6}" y="${mt+10}" text-anchor="end">悪化 ↑</text><text x="${ml-6}" y="${H-mb-2}" text-anchor="end">改善 ↓</text><text x="${ml-6}" y="${Y(0)+4}" text-anchor="end">0</text>`;
+  for(const t of [x0<0?0:null,xr[1]].filter(v=>v!=null)) g+=`<text x="${X(t)}" y="${H-mb+14}" text-anchor="middle" style="font-size:10px">${num(t)}</text>`;
+  const labeled=new Set(L.slice().sort((a,b)=>b.score-a.score).slice(0,5));
+  for(const x of L){
+    const cx=X(x.ann), cy=Y(x.trend), hi=x.level==="高";
+    g+=`<circle cx="${cx}" cy="${cy}" r="${hi?6:5}" fill="${hi?"var(--loss)":"var(--muted)"}" stroke="var(--surface)" stroke-width="2"/>`;
+    if(labeled.has(x)){const left=cx>W*0.68;g+=`<text x="${left?cx-9:cx+9}" y="${cy+4}" text-anchor="${left?"end":"start"}" style="fill:var(--text);font-size:11px">${esc(x.s.name)}</text>`}
+    g+=`<circle cx="${cx}" cy="${cy}" r="12" fill="transparent" data-c="${esc(x.s.code)}" data-tip="${esc(`<b>${x.s.name}</b><br>年換算ロス ${yen(x.ann)}<br>傾向 ${x.trend>0?"悪化 +":"改善 "}${yen(x.trend)}<br>優先度 ${x.level}（${x.score}）`)}" style="cursor:pointer"/>`;
+  }
+  el.innerHTML=g+"</svg>";
+  el.querySelectorAll("circle[data-tip]").forEach(c=>{c.addEventListener("mousemove",e=>showTip(e,c.dataset.tip));c.addEventListener("mouseleave",hideTip);c.addEventListener("click",()=>{hideTip();selectStore(c.dataset.c);showTab("store")})});
+}
+
 // ---------- 起動時：保存データがあればそのまま表示 ----------
 $("#reportSel").addEventListener("change",e=>openReport(e.target.value));
 $("#delReport").onclick=()=>{
