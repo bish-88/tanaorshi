@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>定期棚卸 ロス確認</title>
+<script src="lib/xlsx.full.min.js"></script>
+<style>
+:root{
+  --bg:#f6f5f2; --surface:#fcfcfb; --surface-2:#f0efec; --line:#dedcd6;
+  --text:#0b0b0b; --text-2:#52514e; --muted:#7c7a74;
+  --loss:#c93c3c; --loss-bg:#fbe3e1; --gain:#2a78d6; --gain-bg:#dceafb;
+  --accent:#1c5cab; --zero:#d6d4ce;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#121211; --surface:#1a1a19; --surface-2:#242422; --line:#383835;
+    --text:#f0efec; --text-2:#c3c2b7; --muted:#8f8d86;
+    --loss:#ec6a6a; --loss-bg:#4a2321; --gain:#5598e7; --gain-bg:#1c3150;
+    --accent:#6da7ec; --zero:#4a4a46;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121211; --surface:#1a1a19; --surface-2:#242422; --line:#383835;
+  --text:#f0efec; --text-2:#c3c2b7; --muted:#8f8d86;
+  --loss:#ec6a6a; --loss-bg:#4a2321; --gain:#5598e7; --gain-bg:#1c3150;
+  --accent:#6da7ec; --zero:#4a4a46;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:"Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 16px 60px}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--text-2);margin:0 0 16px}
+.drop{display:block;border:2px dashed var(--line);background:var(--surface);border-radius:12px;padding:28px 16px;text-align:center;cursor:pointer;transition:border-color .15s}
+.drop.over,.drop:hover{border-color:var(--accent)}
+.drop strong{font-size:16px;display:block;margin-bottom:4px}
+.drop small{color:var(--muted)}
+.btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer;font-family:inherit}
+.btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+.err{color:var(--loss);margin-top:10px;white-space:pre-wrap}
+.meta{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--text-2);margin:16px 0 12px;align-items:center}
+.meta .sp{flex:1}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.kpi .l{color:var(--text-2);font-size:12px}
+.kpi .v{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px}
+.kpi .n{color:var(--muted);font-size:12px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:12px;overflow-x:auto}
+.tab{background:none;border:0;border-bottom:3px solid transparent;padding:8px 14px;font-size:14px;color:var(--text-2);cursor:pointer;font-family:inherit;white-space:nowrap}
+.tab.on{color:var(--text);border-bottom-color:var(--accent);font-weight:700}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:16px}
+.card h2{font-size:16px;margin:0 0 8px}
+.card h3{font-size:14px;margin:14px 0 6px;color:var(--text-2)}
+.note{color:var(--muted);font-size:12px}
+.scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+th,td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{font-size:12px;color:var(--text-2);font-weight:600;background:var(--surface);position:sticky;top:0;cursor:pointer;user-select:none}
+th.nosort{cursor:default}
+th .ar{color:var(--muted);font-size:10px}
+td.l,th.l{text-align:left}
+tbody tr.click{cursor:pointer}
+tbody tr.click:hover{background:var(--surface-2)}
+tbody tr.sel{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--accent)}
+.pos{color:var(--loss)} .neg{color:var(--gain)}
+.na{color:var(--muted)}
+.tag{display:inline-block;font-size:11px;padding:0 6px;border-radius:999px;border:1px solid var(--line);color:var(--text-2);margin-left:4px}
+.tag.loss{background:var(--loss-bg);border-color:transparent;color:var(--text)}
+.tag.gain{background:var(--gain-bg);border-color:transparent;color:var(--text)}
+.bar{display:inline-block;height:8px;border-radius:0 4px 4px 0;vertical-align:middle}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px}
+svg text{fill:var(--text-2);font-size:11px;font-family:inherit}
+.tip{position:fixed;pointer-events:none;background:var(--text);color:var(--surface);padding:6px 10px;border-radius:8px;font-size:12px;z-index:10;display:none;max-width:260px}
+.matrix td{padding:4px 6px;font-size:12px}
+.matrix th{font-size:11px;white-space:normal;min-width:64px;vertical-align:bottom}
+.matrix td.l,.matrix th.l{position:sticky;left:0;background:var(--surface);z-index:1}
+.matrix th.l{z-index:2}
+.hidden{display:none}
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
+select,input[type=search]{font-family:inherit;font-size:14px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
+label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
+@media print{.drop,.tabs,.btn,.filters{display:none!important}.wrap{padding:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>定期棚卸 ロス確認</h1>
+  <p class="sub">棚卸ロス分析レポート（.xls / .xlsx）を読み込むと、店舗ごとのロス金額を表示します。</p>
+
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept=".xls,.xlsx,.xlsm" hidden>
+    <strong>ここにExcelファイルをドラッグ、またはクリックして選択</strong>
+    <small>ファイルはこのブラウザの中だけで処理され、どこにも送信されません</small>
+  </label>
+  <div class="err" id="err"></div>
+
+  <div id="app" class="hidden">
+    <div class="meta">
+      <span id="mFile"></span><span id="mDate"></span><span id="mCount"></span>
+      <span class="sp"></span>
+      <button class="btn ghost" id="csv">CSVで保存</button>
+      <button class="btn ghost" onclick="window.print()">印刷</button>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="tabs">
+      <button class="tab on" data-tab="stores">店舗一覧</button>
+      <button class="tab" data-tab="matrix">部門 × 店舗</button>
+      <button class="tab" data-tab="help">見かた</button>
+    </div>
+
+    <section id="t-stores">
+      <div class="card">
+        <h2>店舗別ロス（最新の棚卸）</h2>
+        <p class="note">行をクリックすると、その店舗の推移と部門別の内訳を表示します。プラス＝ロス（帳簿より在庫が少ない）、マイナス＝益（在庫が多い）。</p>
+        <div class="scroll"><table id="storeTable"></table></div>
+      </div>
+      <div id="detail"></div>
+    </section>
+
+    <section id="t-matrix" class="hidden">
+      <div class="card">
+        <h2>部門 × 店舗（売価還元法・最新実施分のロス）</h2>
+        <div class="filters">
+          <label class="ck"><input type="checkbox" id="hideZero" checked>全店ゼロの部門を隠す</label>
+        </div>
+        <p class="note">色が濃いほど金額が大きい（赤＝ロス、青＝益）。今回売価還元の棚卸がない店舗は、直近に実施した回の数字です。</p>
+        <div class="scroll" style="max-height:70vh"><table class="matrix" id="matrix"></table></div>
+      </div>
+    </section>
+
+    <section id="t-help" class="hidden">
+      <div class="card">
+        <h2>見かた</h2>
+        <ul>
+          <li><b>売価還元法（売価）</b>：部門ごとの「推定在庫高売価 − 実地棚卸在庫高売価」。レポートの <b>BK 売価還元合計</b> の数字です。</li>
+          <li><b>総平均法（原価）</b>：ファストフーズ・店内厨房の「（推定在庫数 − 実地棚卸在庫数）× 前月平均単価」。レポートの <b>SH 総平均合計</b> の数字です。</li>
+          <li>売価と原価で基準がちがうため、2つは足さずに別々に表示しています。</li>
+          <li><b>プラス</b>＝ロス（帳簿より在庫が少ない）、<b>マイナス</b>＝益（帳簿より在庫が多い）。</li>
+          <li><b>ロス率</b>はレポートに入っている最新回の数字（%）です。</li>
+          <li>売価還元合計が 0 の回は「実施なし」として扱い、前回比・過去平均の計算から外しています。</li>
+          <li><b>1日あたり</b>＝今回ロス ÷ 前回棚卸からの日数。間隔がちがう店舗どうしを比べるときに使います。</li>
+        </ul>
+      </div>
+    </section>
+  </div>
+</div>
+<div class="tip" id="tip"></div>
+
+<script>
+(function(){
+"use strict";
+const $=s=>document.querySelector(s);
+const yen=v=>v==null||isNaN(v)?"—":(v<0?"−":"")+"¥"+Math.round(Math.abs(v)).toLocaleString("ja-JP");
+const num=v=>v==null||isNaN(v)?"—":(v<0?"−":"")+Math.round(Math.abs(v)).toLocaleString("ja-JP");
+const pct=v=>v==null||isNaN(v)?"—":(v<0?"−":"")+Math.abs(v).toFixed(2)+"%";
+const cls=v=>v==null||isNaN(v)||v===0?"":(v>0?"pos":"neg");
+const fmtD=d=>d?`${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getDate()).padStart(2,"0")}`:"—";
+const fmtShort=d=>d?`${String(d.getFullYear()).slice(2)}/${d.getMonth()+1}/${d.getDate()}`:"";
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let DATA=null, sortKey="bk", sortDir=-1, selected=null;
+
+// ---------- file input ----------
+const drop=$("#drop"), file=$("#file");
+file.addEventListener("change",e=>{if(e.target.files[0])load(e.target.files[0])});
+["dragenter","dragover"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("over")}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("over")}));
+drop.addEventListener("drop",e=>{const f=e.dataTransfer.files[0];if(f)load(f)});
+
+function load(f){
+  $("#err").textContent="";
+  const r=new FileReader();
+  r.onload=e=>{
+    try{
+      const wb=XLSX.read(new Uint8Array(e.target.result),{type:"array"});
+      DATA=parse(wb,f.name);
+      selected=null;
+      render();
+    }catch(err){
+      console.error(err);
+      $("#err").textContent="読み込めませんでした："+err.message;
+    }
+  };
+  r.readAsArrayBuffer(f);
+}
+
+// ---------- parse ----------
+function parse(wb,fname){
+  const sn=wb.SheetNames.find(n=>/^ITEMDATA/i.test(n));
+  if(!sn) throw new Error("「ITEMDATA_…」シートが見つかりません。棚卸ロス分析レポートのファイルか確認してください。");
+  const rows=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:true,defval:""});
+
+  // report date
+  let rdate=null;
+  const st=wb.Sheets["STATUS"];
+  if(st&&st["C1"]&&typeof st["C1"].v==="number"){const p=XLSX.SSF.parse_date_code(st["C1"].v);rdate=new Date(p.y,p.m-1,p.d)}
+  if(!rdate){const m=fname.match(/(20\d{2})(\d{2})(\d{2})/);if(m)rdate=new Date(+m[1],+m[2]-1,+m[3])}
+  if(!rdate) rdate=new Date();
+
+  // 期間数 = 4列目から最初の数値セルまでの列数（日付列の数）
+  const cnt={};
+  for(const r of rows){
+    if(!String(r[2]).trim()) continue;
+    for(let i=4;i<r.length;i++){ if(typeof r[i]==="number"){cnt[i-4]=(cnt[i-4]||0)+1;break} }
+  }
+  const n=+Object.keys(cnt).sort((a,b)=>cnt[b]-cnt[a])[0];
+  if(n<1) throw new Error("列の形式が想定とちがいます。");
+  const iAmt=4+n, iRate=4+2*n, iAvg=iRate+1;
+
+  const stores=new Map(), deptOrder=new Map();
+  for(const r of rows){
+    const code=String(r[0]).trim(), dcode=String(r[2]).trim();
+    if(!code||!dcode) continue;
+    if(!stores.has(code)) stores.set(code,{code,name:String(r[1]).trim(),depts:new Map(),rawDates:null});
+    const s=stores.get(code);
+    const amts=[];for(let i=0;i<n;i++){const v=r[iAmt+i];amts.push(v===""||v==null?null:Number(v))}
+    const rv=r[iRate];
+    const d={code:dcode,name:String(r[3]).trim(),amts,rate:(rv===""||isNaN(Number(rv)))?null:Number(rv)};
+    s.depts.set(dcode,d);
+    if(dcode!=="BK"&&dcode!=="SH"&&!deptOrder.has(dcode)) deptOrder.set(dcode,d.name);
+    const ds=r.slice(4,4+n).map(x=>String(x).trim());
+    if(!s.rawDates||ds.filter(Boolean).length>s.rawDates.filter(Boolean).length) s.rawDates=ds;
+  }
+
+  const shDepts=new Set(["05","06"]);
+  const out=[];
+  for(const s of stores.values()){
+    // dates with year
+    const periods=s.rawDates.map(t=>{const m=t.match(/(\d{1,2})\/(\d{1,2})\s*\(\s*(\d+)\s*日\s*\)/);return m?{m:+m[1],d:+m[2],days:+m[3]}:null});
+    let next=null;
+    for(let i=n-1;i>=0;i--){
+      const p=periods[i]; if(!p) continue;
+      let y;
+      if(!next){y=rdate.getFullYear();if(new Date(y,p.m-1,p.d)>rdate)y--}
+      else{y=next.getFullYear();if(new Date(y,p.m-1,p.d)>next)y--}
+      p.date=new Date(y,p.m-1,p.d); next=p.date;
+    }
+    const bk=s.depts.get("BK"), sh=s.depts.get("SH");
+    const deptList=[...s.depts.values()].filter(d=>d.code!=="BK"&&d.code!=="SH");
+    // BK executed per period: any non-zero dept among 売価還元 depts
+    // 売価還元の実施判定：BK合計が0以外（BK行がなければ部門のどれかが0以外）
+    const bkDone=periods.map((p,i)=>!!p&&(s.depts.get("BK")?!!s.depts.get("BK").amts[i]:deptList.some(d=>!shDepts.has(d.code)&&d.amts[i])));
+    const shDone=periods.map((p,i)=>!!p);
+    const bkVals=bk?bk.amts:Array(n).fill(null), shVals=sh?sh.amts:Array(n).fill(null);
+    const last=n-1;
+    const doneIdx=bkDone.map((v,i)=>v?i:-1).filter(i=>i>=0);
+    const lastBk=doneIdx.length?doneIdx[doneIdx.length-1]:-1;
+    const prevBk=doneIdx.filter(i=>i<lastBk).pop();
+    const shIdx=shDone.map((v,i)=>v?i:-1).filter(i=>i>=0);
+    const avg=(arr,idx)=>idx.length?idx.reduce((a,i)=>a+(arr[i]||0),0)/idx.length:null;
+    const latestP=periods[last];
+    out.push({
+      code:s.code,name:s.name,periods,bkDone,shDone,bkVals,shVals,depts:deptList,
+      date:latestP&&latestP.date, days:latestP&&latestP.days,
+      bkNow:bkDone[last]?bkVals[last]:null,
+      bkRate:bkDone[last]&&bk?bk.rate:null,
+      bkLast:lastBk>=0?bkVals[lastBk]:null, bkLastIdx:lastBk,
+      bkPrev:prevBk!=null?bkVals[prevBk]:null, bkPrevIdx:prevBk,
+      bkAvg:avg(bkVals,doneIdx), bkCount:doneIdx.length,
+      shNow:shDone[last]?shVals[last]:null,
+      shRate:sh?sh.rate:null,
+      shPrev:shIdx.length>1?shVals[shIdx[shIdx.length-2]]:null,
+      shAvg:avg(shVals,shIdx),
+      perDay:bkDone[last]&&latestP?bkVals[last]/latestP.days:null,
+    });
+  }
+  for(const s of out){
+    s.bkDiff=(s.bkNow!=null&&s.bkPrev!=null)?s.bkNow-s.bkPrev:null;
+    s.shDiff=(s.shNow!=null&&s.shPrev!=null)?s.shNow-s.shPrev:null;
+  }
+  return {file:fname,rdate,n,stores:out,deptOrder};
+}
+
+// ---------- render ----------
+function render(){
+  $("#app").classList.remove("hidden");
+  drop.querySelector("strong").textContent="別のファイルを読み込む（ドラッグ または クリック）";
+  $("#mFile").textContent="ファイル："+DATA.file;
+  $("#mDate").textContent="レポート作成日："+fmtD(DATA.rdate);
+  $("#mCount").textContent="店舗数："+DATA.stores.length;
+  renderKpis(); renderTable(); renderMatrix(); $("#detail").innerHTML="";
+}
+
+function renderKpis(){
+  const S=DATA.stores;
+  const bkS=S.filter(s=>s.bkNow!=null), shS=S.filter(s=>s.shNow!=null);
+  const bkSum=bkS.reduce((a,s)=>a+s.bkNow,0), shSum=shS.reduce((a,s)=>a+s.shNow,0);
+  const worst=bkS.slice().sort((a,b)=>b.bkNow-a.bkNow)[0];
+  const none=S.filter(s=>s.bkNow==null).length;
+  $("#kpis").innerHTML=`
+    <div class="kpi"><div class="l">売価還元ロス 合計（今回）</div><div class="v ${cls(bkSum)}">${yen(bkSum)}</div><div class="n">${bkS.length}店舗の合計${none?`（今回実施なし ${none}店舗）`:""}</div></div>
+    <div class="kpi"><div class="l">総平均ロス 合計（今回・原価）</div><div class="v ${cls(shSum)}">${yen(shSum)}</div><div class="n">ファストフーズ・店内厨房</div></div>
+    <div class="kpi"><div class="l">ロスが一番大きい店舗（売価還元）</div><div class="v ${worst?cls(worst.bkNow):""}">${worst?yen(worst.bkNow):"—"}</div><div class="n">${worst?esc(worst.name)+"　ロス率 "+pct(worst.bkRate):""}</div></div>
+    <div class="kpi"><div class="l">ロスが出た店舗 / 益が出た店舗</div><div class="v">${bkS.filter(s=>s.bkNow>0).length} / ${bkS.filter(s=>s.bkNow<0).length}</div><div class="n">売価還元・今回実施の店舗</div></div>`;
+}
+
+const COLS=[
+  {k:"code",t:"店番",l:1},
+  {k:"name",t:"店名",l:1},
+  {k:"date",t:"今回棚卸日"},
+  {k:"days",t:"間隔"},
+  {k:"bk",t:"売価還元ロス<br>今回"},
+  {k:"bkRate",t:"ロス率"},
+  {k:"bkDiff",t:"前回比"},
+  {k:"bkAvg",t:"過去平均<br>(実施回)"},
+  {k:"perDay",t:"1日あたり"},
+  {k:"shNow",t:"総平均ロス<br>今回(原価)"},
+  {k:"shRate",t:"ロス率"},
+  {k:"shDiff",t:"前回比"},
+];
+function sortVal(s,k){
+  if(k==="bk") return s.bkNow!=null?s.bkNow:(s.bkLast!=null?s.bkLast-1e12:-2e12);
+  if(k==="date") return s.date?s.date.getTime():0;
+  const v=s[k]; return v==null?-1e15:v;
+}
+function renderTable(){
+  const S=DATA.stores.slice().sort((a,b)=>{
+    const x=sortVal(a,sortKey),y=sortVal(b,sortKey);
+    return (typeof x==="string"?x.localeCompare(y,"ja"):x-y)*sortDir;
+  });
+  const maxBk=Math.max(1,...DATA.stores.map(s=>Math.abs(s.bkNow??s.bkLast??0)));
+  let h="<thead><tr>"+COLS.map(c=>`<th class="${c.l?"l":""}" data-k="${c.k}">${c.t} <span class="ar">${sortKey===c.k?(sortDir<0?"▼":"▲"):""}</span></th>`).join("")+"</tr></thead><tbody>";
+  for(const s of S){
+    let bkCell;
+    if(s.bkNow!=null){
+      const w=Math.round(Math.abs(s.bkNow)/maxBk*60);
+      bkCell=`<span class="${cls(s.bkNow)}">${yen(s.bkNow)}</span> <span class="bar" style="width:${w}px;background:${s.bkNow>=0?"var(--loss)":"var(--gain)"}"></span>`;
+    }else{
+      bkCell=`<span class="na">今回なし</span>`+(s.bkLast!=null?`<br><small class="na">前回実施 ${fmtShort(s.periods[s.bkLastIdx].date)}：${yen(s.bkLast)}</small>`:"");
+    }
+    h+=`<tr class="click ${selected===s.code?"sel":""}" data-c="${esc(s.code)}">
+      <td class="l">${esc(s.code)}</td><td class="l">${esc(s.name)}</td>
+      <td>${fmtD(s.date)}</td><td>${s.days??"—"}日</td>
+      <td style="text-align:left">${bkCell}</td>
+      <td class="${cls(s.bkRate)}">${pct(s.bkRate)}</td>
+      <td class="${cls(s.bkDiff)}">${s.bkDiff==null?"—":(s.bkDiff>0?"+":"")+yen(s.bkDiff).replace("−","−")}</td>
+      <td class="${cls(s.bkAvg)}">${yen(s.bkAvg)}</td>
+      <td class="${cls(s.perDay)}">${yen(s.perDay)}</td>
+      <td class="${cls(s.shNow)}">${yen(s.shNow)}</td>
+      <td class="${cls(s.shRate)}">${pct(s.shRate)}</td>
+      <td class="${cls(s.shDiff)}">${s.shDiff==null?"—":(s.shDiff>0?"+":"")+yen(s.shDiff)}</td></tr>`;
+  }
+  $("#storeTable").innerHTML=h+"</tbody>";
+  $("#storeTable").querySelectorAll("th").forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k; if(sortKey===k) sortDir*=-1; else {sortKey=k;sortDir=(k==="code"||k==="name")?1:-1}
+    renderTable();
+  });
+  $("#storeTable").querySelectorAll("tr.click").forEach(tr=>tr.onclick=()=>{selected=tr.dataset.c;renderTable();renderDetail()});
+}
+
+// ---------- detail ----------
+function renderDetail(){
+  const s=DATA.stores.find(x=>x.code===selected); if(!s) return;
+  const n=DATA.n, last=n-1;
+  const useIdx=s.bkNow!=null?last:s.bkLastIdx;
+  const prevIdx=s.bkDone.map((v,i)=>v&&i<useIdx?i:-1).filter(i=>i>=0).pop();
+  const doneIdx=s.bkDone.map((v,i)=>v?i:-1).filter(i=>i>=0);
+  const isSh=d=>d.code==="05"||d.code==="06";
+  const rows=s.depts.filter(d=>!isSh(d)).map(d=>{
+    const now=useIdx>=0?d.amts[useIdx]:null;
+    const prev=prevIdx!=null?d.amts[prevIdx]:null;
+    const av=doneIdx.length?doneIdx.reduce((a,i)=>a+(d.amts[i]||0),0)/doneIdx.length:null;
+    return {d,now,prev,av,rate:useIdx===last?d.rate:null};
+  });
+  const shRows=s.depts.filter(isSh).map(d=>{
+    const shIdx=s.shDone.map((v,i)=>v?i:-1).filter(i=>i>=0);
+    return {d,now:d.amts[last],prev:shIdx.length>1?d.amts[shIdx[shIdx.length-2]]:null,av:shIdx.reduce((a,i)=>a+(d.amts[i]||0),0)/Math.max(1,shIdx.length),rate:d.rate};
+  });
+  rows.sort((a,b)=>(b.now||0)-(a.now||0));
+  const top=rows.filter(r=>r.now>0).slice(0,5), bottom=rows.filter(r=>r.now<0).slice(-5).reverse();
+  const usedLabel=useIdx>=0?fmtD(s.periods[useIdx].date):"—";
+
+  const deptTable=(list,showAll)=>{
+    const L=showAll?list:list.filter(r=>r.now||r.prev||r.av);
+    return `<thead><tr><th class="l nosort">部門</th><th class="nosort">今回</th><th class="nosort">ロス率</th><th class="nosort">前回</th><th class="nosort">過去平均</th></tr></thead><tbody>`+
+      L.map(r=>`<tr><td class="l">${esc(r.d.code)} ${esc(r.d.name)}</td><td class="${cls(r.now)}">${yen(r.now)}</td><td class="${cls(r.rate)}">${r.rate==null?"—":pct(r.rate)}</td><td class="${cls(r.prev)}">${yen(r.prev)}</td><td class="${cls(r.av)}">${yen(r.av)}</td></tr>`).join("")+"</tbody>";
+  };
+
+  $("#detail").innerHTML=`
+  <div class="card" id="detailCard">
+    <h2>${esc(s.code)} ${esc(s.name)}</h2>
+    <p class="note">今回棚卸日 ${fmtD(s.date)}（前回から ${s.days??"—"}日）${s.bkNow==null?`／売価還元は今回実施なし。部門別は直近実施 ${usedLabel} の数字`:""}</p>
+    <div class="kpis">
+      <div class="kpi"><div class="l">売価還元ロス（${s.bkNow!=null?"今回":"直近実施 "+usedLabel}）</div><div class="v ${cls(s.bkNow??s.bkLast)}">${yen(s.bkNow??s.bkLast)}</div><div class="n">ロス率 ${pct(s.bkRate)}　過去平均 ${yen(s.bkAvg)}（${s.bkCount}回）</div></div>
+      <div class="kpi"><div class="l">総平均ロス（今回・原価）</div><div class="v ${cls(s.shNow)}">${yen(s.shNow)}</div><div class="n">ロス率 ${pct(s.shRate)}　過去平均 ${yen(s.shAvg)}</div></div>
+    </div>
+    <div class="charts">
+      <div><h3>売価還元ロスの推移（売価）</h3><div id="c1"></div></div>
+      <div><h3>総平均ロスの推移（原価）</h3><div id="c2"></div></div>
+    </div>
+    <div class="charts">
+      <div><h3>ロスが大きい部門 TOP5</h3><div class="scroll"><table>${deptTable(top,true)}</table></div></div>
+      <div><h3>益が大きい部門 TOP5</h3><div class="scroll"><table>${deptTable(bottom,true)}</table></div></div>
+    </div>
+    <h3>部門別の全回推移（売価還元）</h3>
+    <div class="scroll"><table id="allDept"></table></div>
+    <h3>総平均法の部門</h3>
+    <div class="scroll"><table>${deptTable(shRows,true)}</table></div>
+  </div>`;
+  barChart($("#c1"),s.periods,s.bkVals,s.bkDone);
+  barChart($("#c2"),s.periods,s.shVals,s.shDone);
+
+  // all periods per dept
+  const pIdx=s.periods.map((p,i)=>p?i:-1).filter(i=>i>=0);
+  let h=`<thead><tr><th class="l nosort">部門</th>${pIdx.map(i=>`<th class="nosort">${fmtShort(s.periods[i].date)}<br><span class="ar">${s.periods[i].days}日${s.bkDone[i]?"":"・実施なし"}</span></th>`).join("")}</tr></thead><tbody>`;
+  for(const r of rows.slice().sort((a,b)=>a.d.code.localeCompare(b.d.code))){
+    if(!pIdx.some(i=>r.d.amts[i])) continue;
+    h+=`<tr><td class="l">${esc(r.d.code)} ${esc(r.d.name)}</td>${pIdx.map(i=>s.bkDone[i]?`<td class="${cls(r.d.amts[i])}">${num(r.d.amts[i])}</td>`:`<td class="na">—</td>`).join("")}</tr>`;
+  }
+  h+=`<tr><td class="l"><b>売価還元合計</b></td>${pIdx.map(i=>s.bkDone[i]?`<td class="${cls(s.bkVals[i])}"><b>${num(s.bkVals[i])}</b></td>`:`<td class="na">—</td>`).join("")}</tr>`;
+  $("#allDept").innerHTML=h+"</tbody>";
+  $("#detailCard").scrollIntoView({behavior:"smooth",block:"start"});
+}
+
+// ---------- chart ----------
+const tip=$("#tip");
+function showTip(e,html){tip.innerHTML=html;tip.style.display="block";const x=Math.min(e.clientX+12,innerWidth-270);tip.style.left=x+"px";tip.style.top=(e.clientY+12)+"px"}
+function hideTip(){tip.style.display="none"}
+function niceMax(v){if(v<=0)return 1;const p=Math.pow(10,Math.floor(Math.log10(v)));const f=v/p;return (f<=1?1:f<=2?2:f<=5?5:10)*p}
+function barChart(el,periods,vals,done){
+  const idx=periods.map((p,i)=>p?i:-1).filter(i=>i>=0);
+  const W=520,H=220,ml=62,mr=8,mt=10,mb=34;
+  const vs=idx.map(i=>done[i]?(vals[i]||0):0);
+  const mx=niceMax(Math.max(0,...vs)), mn=-niceMax(Math.max(0,...vs.map(v=>-v)));
+  const lo=Math.min(0,vs.some(v=>v<0)?mn:0), hi=vs.some(v=>v>0)?mx:(lo<0?0:1);
+  const y=v=>mt+(hi-v)/(hi-lo)*(H-mt-mb);
+  const bw=(W-ml-mr)/Math.max(1,idx.length);
+  let g=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="ロス推移">`;
+  const ticks=[hi,(hi+lo)/2,lo].filter((v,i,a)=>a.indexOf(v)===i);
+  if(lo<0&&hi>0){ticks.length=0;ticks.push(hi,0,lo)}
+  for(const t of ticks){g+=`<line x1="${ml}" x2="${W-mr}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)" stroke-width="1"/><text x="${ml-6}" y="${y(t)+4}" text-anchor="end">${num(t)}</text>`}
+  g+=`<line x1="${ml}" x2="${W-mr}" y1="${y(0)}" y2="${y(0)}" stroke="var(--muted)" stroke-width="1"/>`;
+  idx.forEach((i,k)=>{
+    const p=periods[i], x=ml+k*bw, cx=x+bw/2, w=Math.min(36,bw*0.6);
+    const v=done[i]?(vals[i]||0):null;
+    if(v!=null&&v!==0){
+      const y0=y(0),y1=y(v),top=Math.min(y0,y1),h=Math.max(1,Math.abs(y1-y0)),r=Math.min(4,h);
+      const c=v>0?"var(--loss)":"var(--gain)";
+      // rounded data-end only
+      const path=v>0
+        ?`M${cx-w/2},${y0} V${top+r} Q${cx-w/2},${top} ${cx-w/2+r},${top} H${cx+w/2-r} Q${cx+w/2},${top} ${cx+w/2},${top+r} V${y0} Z`
+        :`M${cx-w/2},${y0} V${top+h-r} Q${cx-w/2},${top+h} ${cx-w/2+r},${top+h} H${cx+w/2-r} Q${cx+w/2},${top+h} ${cx+w/2},${top+h-r} V${y0} Z`;
+      g+=`<path d="${path}" fill="${c}"/>`;
+    }else if(v==null||!done[i]){
+      g+=`<text x="${cx}" y="${y(0)-6}" text-anchor="middle" class="na">実施なし</text>`;
+    }
+    g+=`<text x="${cx}" y="${H-mb+14}" text-anchor="middle">${fmtShort(p.date)}</text><text x="${cx}" y="${H-mb+27}" text-anchor="middle" style="font-size:10px">${p.days}日</text>`;
+    const tipHtml=`<b>${fmtD(p.date)}</b>（${p.days}日間）<br>`+(done[i]?`${v>0?"ロス":v<0?"益":""} ${yen(v)}<br>1日あたり ${yen(v/p.days)}`:"実施なし");
+    g+=`<rect x="${x}" y="${mt}" width="${bw}" height="${H-mt-mb+30}" fill="transparent" data-tip="${esc(tipHtml)}"/>`;
+  });
+  g+="</svg>";
+  el.innerHTML=g;
+  el.querySelectorAll("rect[data-tip]").forEach(r=>{r.addEventListener("mousemove",e=>showTip(e,r.dataset.tip));r.addEventListener("mouseleave",hideTip)});
+}
+
+// ---------- matrix ----------
+function renderMatrix(){
+  const S=DATA.stores.slice().sort((a,b)=>(b.bkLast||0)-(a.bkLast||0));
+  const hide=$("#hideZero").checked;
+  const val=(s,dc)=>{if(s.bkLastIdx<0)return null;const d=s.depts.find(x=>x.code===dc);return d?d.amts[s.bkLastIdx]:null};
+  const depts=[...DATA.deptOrder.entries()].filter(([c])=>c!=="05"&&c!=="06").sort((a,b)=>a[0].localeCompare(b[0]));
+  let mx=1;for(const s of S)for(const [c] of depts){const v=val(s,c);if(v)mx=Math.max(mx,Math.abs(v))}
+  const shade=v=>{if(!v)return"";const a=Math.min(1,Math.sqrt(Math.abs(v)/mx));return `background:color-mix(in srgb, ${v>0?"var(--loss)":"var(--gain)"} ${Math.round(a*55)}%, transparent)`};
+  let h=`<thead><tr><th class="l nosort">部門</th><th class="nosort">全店合計</th>${S.map(s=>`<th class="nosort">${esc(s.name)}${s.bkNow==null?"<br><span class='ar'>※前回分</span>":""}</th>`).join("")}</tr></thead><tbody>`;
+  for(const [c,name] of depts){
+    const vs=S.map(s=>val(s,c));
+    if(hide&&!vs.some(v=>v)) continue;
+    const tot=vs.reduce((a,v)=>a+(v||0),0);
+    h+=`<tr><td class="l">${esc(c)} ${esc(name)}</td><td class="${cls(tot)}"><b>${num(tot)}</b></td>${vs.map((v,k)=>`<td style="${shade(v)}" title="${esc(S[k].name)} / ${esc(name)}：${yen(v)}">${v?num(v):'<span class="na">0</span>'}</td>`).join("")}</tr>`;
+  }
+  const totAll=S.reduce((a,s)=>a+(s.bkLast||0),0);
+  h+=`<tr><td class="l"><b>合計</b></td><td class="${cls(totAll)}"><b>${num(totAll)}</b></td>${S.map(s=>`<td class="${cls(s.bkLast)}"><b>${num(s.bkLast)}</b></td>`).join("")}</tr>`;
+  $("#matrix").innerHTML=h+"</tbody>";
+}
+$("#hideZero").addEventListener("change",()=>DATA&&renderMatrix());
+
+// ---------- tabs ----------
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===b));
+  ["stores","matrix","help"].forEach(t=>$("#t-"+t).classList.toggle("hidden",t!==b.dataset.tab));
+});
+
+// ---------- CSV ----------
+$("#csv").onclick=()=>{
+  if(!DATA)return;
+  const head=["店番","店名","今回棚卸日","間隔(日)","売価還元ロス今回","売価還元ロス率(%)","売価還元前回比","売価還元過去平均","1日あたり","直近実施日(売価還元)","直近実施ロス(売価還元)","総平均ロス今回(原価)","総平均ロス率(%)","総平均前回比"];
+  const q=v=>v==null?"":(typeof v==="string"?`"${v.replace(/"/g,'""')}"`:String(Math.round(v*100)/100));
+  const lines=[head.join(",")];
+  for(const s of DATA.stores){
+    lines.push([q(s.code),q(s.name),q(fmtD(s.date)),q(s.days),q(s.bkNow),q(s.bkRate),q(s.bkDiff),q(s.bkAvg),q(s.perDay),q(s.bkLastIdx>=0?fmtD(s.periods[s.bkLastIdx].date):null),q(s.bkLast),q(s.shNow),q(s.shRate),q(s.shDiff)].join(","));
+  }
+  const blob=new Blob(["﻿"+lines.join("\r\n")],{type:"text/csv"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+  a.download="棚卸ロス_店舗別_"+fmtD(DATA.rdate).replace(/\//g,"")+".csv";a.click();
+};
+})();
+</script>
+</body>
+</html>
