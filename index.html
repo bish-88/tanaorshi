@@ -77,6 +77,10 @@ svg text{fill:var(--text-2);font-size:11px;font-family:inherit}
 .matrix td.l,.matrix th.l{position:sticky;left:0;background:var(--surface);z-index:1}
 .matrix th.l{z-index:2}
 .hidden{display:none}
+@media (max-width:520px){.storebar .wide{display:none}.storebar{gap:6px}}
+.storebar{flex-wrap:nowrap;position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 0}
+.storebar select{flex:1;min-width:0;max-width:420px;font-size:16px;padding:8px 10px}
+.rank{display:inline-block;font-size:12px;color:var(--text-2);background:var(--surface-2);border-radius:999px;padding:2px 10px;margin-left:8px;font-weight:400;vertical-align:middle}
 .filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px}
 select,input[type=search]{font-family:inherit;font-size:14px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text)}
 label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
@@ -107,6 +111,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
 
     <div class="tabs">
       <button class="tab on" data-tab="stores">店舗一覧</button>
+      <button class="tab" data-tab="store">店舗別</button>
       <button class="tab" data-tab="matrix">部門 × 店舗</button>
       <button class="tab" data-tab="help">見かた</button>
     </div>
@@ -114,8 +119,16 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
     <section id="t-stores">
       <div class="card">
         <h2>店舗別ロス（最新の棚卸）</h2>
-        <p class="note">行をクリックすると、その店舗の推移と部門別の内訳を表示します。プラス＝ロス（帳簿より在庫が少ない）、マイナス＝益（在庫が多い）。</p>
+        <p class="note">行をクリックすると「店舗別」でその店舗をくわしく表示します。プラス＝ロス（帳簿より在庫が少ない）、マイナス＝益（在庫が多い）。</p>
         <div class="scroll"><table id="storeTable"></table></div>
+      </div>
+    </section>
+
+    <section id="t-store" class="hidden">
+      <div class="filters storebar">
+        <button class="btn ghost" id="prevStore" aria-label="前の店舗">◀<span class="wide"> 前の店</span></button>
+        <select id="storeSel" aria-label="店舗をえらぶ"></select>
+        <button class="btn ghost" id="nextStore" aria-label="次の店舗"><span class="wide">次の店 </span>▶</button>
       </div>
       <div id="detail"></div>
     </section>
@@ -281,7 +294,12 @@ function render(){
   $("#mFile").textContent="ファイル："+DATA.file;
   $("#mDate").textContent="レポート作成日："+fmtD(DATA.rdate);
   $("#mCount").textContent="店舗数："+DATA.stores.length;
-  renderKpis(); renderTable(); renderMatrix(); $("#detail").innerHTML="";
+  renderKpis(); renderTable(); renderMatrix();
+  const list=DATA.stores.slice().sort((a,b)=>a.code.localeCompare(b.code));
+  $("#storeSel").innerHTML=list.map(x=>`<option value="${esc(x.code)}">${esc(x.code)} ${esc(x.name)}</option>`).join("");
+  let saved=null; try{saved=localStorage.getItem("tana_store")}catch(e){}
+  selected=(list.find(x=>x.code===saved)||list[0]).code;
+  renderDetail();
 }
 
 function renderKpis(){
@@ -348,7 +366,7 @@ function renderTable(){
     const k=th.dataset.k; if(sortKey===k) sortDir*=-1; else {sortKey=k;sortDir=(k==="code"||k==="name")?1:-1}
     renderTable();
   });
-  $("#storeTable").querySelectorAll("tr.click").forEach(tr=>tr.onclick=()=>{selected=tr.dataset.c;renderTable();renderDetail()});
+  $("#storeTable").querySelectorAll("tr.click").forEach(tr=>tr.onclick=()=>{selectStore(tr.dataset.c);showTab("store");window.scrollTo({top:document.querySelector(".tabs").offsetTop-8,behavior:"smooth"})});
 }
 
 // ---------- detail ----------
@@ -381,7 +399,7 @@ function renderDetail(){
 
   $("#detail").innerHTML=`
   <div class="card" id="detailCard">
-    <h2>${esc(s.code)} ${esc(s.name)}</h2>
+    <h2>${esc(s.code)} ${esc(s.name)}${rankLabel(s)}</h2>
     <p class="note">今回棚卸日 ${fmtD(s.date)}（前回から ${s.days??"—"}日）${s.bkNow==null?`／売価還元は今回実施なし。部門別は直近実施 ${usedLabel} の数字`:""}</p>
     <div class="kpis">
       <div class="kpi"><div class="l">売価還元ロス（${s.bkNow!=null?"今回":"直近実施 "+usedLabel}）</div><div class="v ${cls(s.bkNow??s.bkLast)}">${yen(s.bkNow??s.bkLast)}</div><div class="n">ロス率 ${pct(s.bkRate)}　過去平均 ${yen(s.bkAvg)}（${s.bkCount}回）</div></div>
@@ -412,7 +430,7 @@ function renderDetail(){
   }
   h+=`<tr><td class="l"><b>売価還元合計</b></td>${pIdx.map(i=>s.bkDone[i]?`<td class="${cls(s.bkVals[i])}"><b>${num(s.bkVals[i])}</b></td>`:`<td class="na">—</td>`).join("")}</tr>`;
   $("#allDept").innerHTML=h+"</tbody>";
-  $("#detailCard").scrollIntoView({behavior:"smooth",block:"start"});
+  $("#storeSel").value=s.code;
 }
 
 // ---------- chart ----------
@@ -478,10 +496,30 @@ function renderMatrix(){
 $("#hideZero").addEventListener("change",()=>DATA&&renderMatrix());
 
 // ---------- tabs ----------
-document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x===b));
-  ["stores","matrix","help"].forEach(t=>$("#t-"+t).classList.toggle("hidden",t!==b.dataset.tab));
-});
+function showTab(name){
+  document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("on",x.dataset.tab===name));
+  ["stores","store","matrix","help"].forEach(t=>$("#t-"+t).classList.toggle("hidden",t!==name));
+}
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+
+// ---------- 店舗えらび ----------
+function selectStore(code){
+  selected=code; try{localStorage.setItem("tana_store",code)}catch(e){}
+  renderTable(); renderDetail();
+}
+function rankLabel(s){
+  const L=DATA.stores.filter(x=>x.bkNow!=null).sort((a,b)=>b.bkNow-a.bkNow);
+  const i=L.indexOf(s);
+  return i<0?`<span class="rank">売価還元は今回なし</span>`:`<span class="rank">売価還元ロス ${L.length}店舗中 ${i+1}位</span>`;
+}
+$("#storeSel").addEventListener("change",e=>selectStore(e.target.value));
+function stepStore(d){
+  const opts=[...$("#storeSel").options].map(o=>o.value);
+  const i=opts.indexOf(selected); if(i<0)return;
+  selectStore(opts[(i+d+opts.length)%opts.length]);
+}
+$("#prevStore").onclick=()=>stepStore(-1);
+$("#nextStore").onclick=()=>stepStore(1);
 
 // ---------- CSV ----------
 $("#csv").onclick=()=>{
