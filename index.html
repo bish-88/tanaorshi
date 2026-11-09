@@ -76,8 +76,10 @@ svg text{fill:var(--text-2);font-size:11px;font-family:inherit}
 .matrix th{font-size:11px;white-space:normal;min-width:64px;vertical-align:bottom}
 .matrix td.l,.matrix th.l{position:sticky;left:0;background:var(--surface);z-index:1}
 .matrix th.l{z-index:2}
-.hidden{display:none}
+.hidden{display:none!important}
 .reportbox{margin-top:12px}
+.lock{margin:0 0 12px}
+.lock input[type=password]{font-size:16px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text);min-width:160px;flex:1;max-width:280px}
 .reportbox select{max-width:100%}
 @media (max-width:520px){.storebar .wide{display:none}.storebar{gap:6px}}
 .storebar{flex-wrap:nowrap;position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 0}
@@ -94,6 +96,16 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
   <h1>定期棚卸 ロス確認</h1>
   <p class="sub">棚卸ロス分析レポート（.xls / .xlsx）を読み込むと、店舗ごとのロス金額を表示します。</p>
 
+  <div class="card lock hidden" id="lockBox">
+    <h2>パスワードを入れてください</h2>
+    <p class="note">共有されている棚卸データがあります。パスワードを入れると見られます。</p>
+    <form id="pwForm" class="filters">
+      <input type="password" id="pw" autocomplete="current-password" placeholder="パスワード" aria-label="パスワード">
+      <button class="btn" type="submit">開く</button>
+      <label class="ck"><input type="checkbox" id="pwRemember" checked>このブラウザで覚える</label>
+    </form>
+    <div class="err" id="pwErr"></div>
+  </div>
   <label class="drop" id="drop">
     <input type="file" id="file" accept=".xls,.xlsx,.xlsm" hidden>
     <strong>ここにExcelファイルをドラッグ、またはクリックして選択</strong>
@@ -153,6 +165,21 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
     </section>
 
     <section id="t-help" class="hidden">
+      <div class="card" id="adminCard">
+        <h2>新しいレポートをみんなに共有する（更新する人用）</h2>
+        <ol>
+          <li>新しいExcelを上の枠に読み込む</li>
+          <li>下のボタンで <b>data.enc</b> を作って保存する（いま表示できるレポートが全部入ります）</li>
+          <li>GitHub の <b>bish-88/tanaorshi</b> → <b>data</b> フォルダ → <b>Add file → Upload files</b> で data.enc をアップロードして <b>Commit changes</b></li>
+          <li>1〜2分で、みんなのページに新しいデータが出ます</li>
+        </ol>
+        <div class="filters">
+          <input type="password" id="exPw" placeholder="パスワード" aria-label="共有用パスワード" style="font-size:14px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--text)">
+          <button class="btn" id="exportBtn">data.enc を作る</button>
+          <span class="note" id="exMsg"></span>
+        </div>
+        <p class="note">パスワードを変えたいときは、ここに新しいパスワードを入れて作り直してください。</p>
+      </div>
       <div class="card">
         <h2>見かた</h2>
         <ul>
@@ -231,16 +258,25 @@ function saveReport(rep){
   list.sort((a,b)=>b.rdate-a.rdate||b.savedAt-a.savedAt);
   return writeStore(list.slice(0,MAXREP));
 }
+let SHARED=[];   // GitHubに置いた暗号化データから読んだレポート
+function allReports(){
+  const m=new Map();
+  for(const x of SHARED) m.set(x.id,{...x,shared:true});
+  for(const x of readStore()) if(!m.has(x.id)) m.set(x.id,x);
+  return [...m.values()].sort((a,b)=>b.rdate-a.rdate||(b.savedAt||0)-(a.savedAt||0));
+}
 function refreshReportSel(){
-  const list=readStore();
+  const list=allReports();
   const sel=$("#reportSel");
   if(!list.length){sel.innerHTML="";$("#reportBox").classList.add("hidden");return}
   $("#reportBox").classList.remove("hidden");
-  sel.innerHTML=list.map((x,i)=>`<option value="${esc(x.id)}">${fmtD(new Date(x.rdate))} 作成${i===0?"（最新）":""}　${esc(x.fname)}</option>`).join("");
+  sel.innerHTML=list.map((x,i)=>`<option value="${esc(x.id)}">${fmtD(new Date(x.rdate))} 作成${i===0?"（最新）":""}${x.shared?"　共有":"　このブラウザだけ"}　${esc(x.fname)}</option>`).join("");
   if(CUR) sel.value=CUR;
+  const cur=list.find(x=>x.id===CUR);
+  $("#delReport").classList.toggle("hidden",!cur||!!cur.shared);
 }
 function openReport(id){
-  const rep=readStore().find(x=>x.id===id); if(!rep) return false;
+  const rep=allReports().find(x=>x.id===id); if(!rep) return false;
   try{DATA=parseRows(rep);CUR=rep.id;render();return true}catch(e){console.error(e);return false}
 }
 
@@ -597,11 +633,68 @@ $("#reportSel").addEventListener("change",e=>openReport(e.target.value));
 $("#delReport").onclick=()=>{
   if(!CUR) return;
   writeStore(readStore().filter(x=>x.id!==CUR));
-  const rest=readStore();
+  const rest=allReports();
   if(rest.length) openReport(rest[0].id);
   else{CUR=null;DATA=null;$("#app").classList.add("hidden");$("#reportBox").classList.add("hidden");drop.querySelector("strong").textContent="ここにExcelファイルをドラッグ、またはクリックして選択"}
 };
-(function start(){
+// ---------- 暗号化（AES-GCM + PBKDF2） ----------
+const PWKEY="tana_pw_v1", ITER=600000;
+const b64e=u=>{let s="";for(let i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)};
+const b64d=t=>Uint8Array.from(atob(t),c=>c.charCodeAt(0));
+async function pipe(bytes,stream){return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(stream)).arrayBuffer())}
+async function keyFrom(pw,salt,iter){
+  const base=await crypto.subtle.importKey("raw",new TextEncoder().encode(pw),"PBKDF2",false,["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:iter,hash:"SHA-256"},base,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function encryptReports(reports,pw){
+  const salt=crypto.getRandomValues(new Uint8Array(16)), iv=crypto.getRandomValues(new Uint8Array(12));
+  const plain=await pipe(new TextEncoder().encode(JSON.stringify(reports)),new CompressionStream("gzip"));
+  const ct=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv},await keyFrom(pw,salt,ITER),plain));
+  return JSON.stringify({v:1,kdf:"PBKDF2-SHA256",iter:ITER,gzip:true,salt:b64e(salt),iv:b64e(iv),ct:b64e(ct)});
+}
+async function decryptReports(obj,pw){
+  const key=await keyFrom(pw,b64d(obj.salt),obj.iter);
+  let plain=new Uint8Array(await crypto.subtle.decrypt({name:"AES-GCM",iv:b64d(obj.iv)},key,b64d(obj.ct)));
+  if(obj.gzip) plain=await pipe(plain,new DecompressionStream("gzip"));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+let ENC=null, PW=null;
+async function unlock(pw,remember){
+  const list=await decryptReports(ENC,pw);   // パスワードがちがうとここで失敗
+  SHARED=list; PW=pw; $("#exPw").value=pw;
+  if(remember){try{localStorage.setItem(PWKEY,pw)}catch(e){}}
+  $("#lockBox").classList.add("hidden");
+  const all=allReports();
+  if(all.length) openReport(all[0].id);
+}
+$("#pwForm").addEventListener("submit",async e=>{
+  e.preventDefault(); $("#pwErr").textContent="確認中…";
+  try{await unlock($("#pw").value,$("#pwRemember").checked);$("#pwErr").textContent=""}
+  catch(err){console.error(err);$("#pwErr").textContent="パスワードがちがいます。"}
+});
+$("#exportBtn").onclick=async()=>{
+  const pw=$("#exPw").value;
+  if(pw.length<8){$("#exMsg").textContent="パスワードは8文字以上にしてください。";return}
+  const list=allReports().map(({shared,...x})=>x);
+  if(!list.length){$("#exMsg").textContent="先にExcelを読み込んでください。";return}
+  $("#exMsg").textContent="作成中…";
+  try{
+    const txt=await encryptReports(list,pw);
+    const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([txt],{type:"application/octet-stream"}));a.download="data.enc";a.click();
+    $("#exMsg").textContent=`data.enc を保存しました（レポート ${list.length}件）。GitHub の data フォルダにアップロードしてください。`;
+  }catch(err){console.error(err);$("#exMsg").textContent="作れませんでした："+err.message}
+};
+(async function start(){
+  try{
+    const r=await fetch("data/data.enc",{cache:"no-cache"});
+    if(r.ok) ENC=await r.json();
+  }catch(e){}
+  if(ENC){
+    let saved=null;try{saved=localStorage.getItem(PWKEY)}catch(e){}
+    if(saved){try{await unlock(saved,false);return}catch(e){try{localStorage.removeItem(PWKEY)}catch(_){}}}
+    $("#lockBox").classList.remove("hidden");
+    // 共有データを開く前でも、このブラウザに保存したものは見られる
+  }
   const list=readStore();
   if(list.length&&openReport(list[0].id)) $("#saveMsg").textContent="保存してあるデータを表示しています。";
 })();
