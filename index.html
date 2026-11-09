@@ -104,7 +104,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
 <body>
 <div class="wrap">
   <h1>定期棚卸 ロス確認</h1>
-  <p class="sub">棚卸ロス分析レポート（.xls / .xlsx）を読み込むと、店舗ごとのロス金額を表示します。</p>
+  <p class="sub">定期棚卸の結果を、店舗ごとのロス金額で確認できます。</p>
 
   <div class="card lock hidden" id="lockBox">
     <h2>パスワードを入れてください</h2>
@@ -116,7 +116,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
     </form>
     <div class="err" id="pwErr"></div>
   </div>
-  <label class="drop" id="drop">
+  <label class="drop hidden" id="drop">
     <input type="file" id="file" accept=".xls,.xlsx,.xlsm" hidden>
     <strong>ここにExcelファイルをドラッグ、またはクリックして選択</strong>
     <small>ファイルはこのブラウザの中だけで処理され、どこにも送信されません</small>
@@ -125,7 +125,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
   <div class="filters reportbox hidden" id="reportBox">
     <label for="reportSel" class="note" style="font-size:13px">表示するレポート</label>
     <select id="reportSel"></select>
-    <button class="btn ghost" id="delReport">このレポートを消す</button>
+    <button class="btn ghost hidden" id="delReport" disabled>このレポートを消す</button>
     <span class="note" id="saveMsg"></span>
   </div>
 
@@ -178,7 +178,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
     </section>
 
     <section id="t-help" class="hidden">
-      <div class="card" id="adminCard">
+      <div class="card hidden" id="adminCard">
         <h2>新しいレポートをみんなに共有する（更新する人用）</h2>
         <ol>
           <li>新しいExcelを上の枠に読み込む</li>
@@ -203,7 +203,7 @@ label.ck{display:flex;gap:6px;align-items:center;color:var(--text-2)}
           <li><b>ロス率</b>はレポートに入っている最新回の数字です（Excelと同じ表示）。</li>
           <li>店舗合計が 0 でも部門ごとに数字がある回は「実施した回」です（部門のプラスとマイナスで合計が0）。部門別の表で中身を見られます。</li>
           <li>部門の数字もすべて 0 の回だけを「実施なし」として、前回比・過去平均の計算から外しています。</li>
-          <li>読み込んだデータはこのブラウザに保存されるので、次からはExcelをアップロードしなくても見られます。新しいレポートが出たら、そのExcelを読み込めば更新されます。</li>
+          <li>新しいレポートが出たら、管理者がデータを更新します。前のレポートも「表示するレポート」から選べます。</li>
           <li><b>年換算ロス</b>＝実施した回のロス合計 ÷ その期間の日数 × 365。売価還元をしなかった回をまたぐ日数も足しています。</li>
           <li><b>傾向</b>＝直近2回の年換算 − それより前の回の年換算。プラスは悪化。</li>
           <li><b>急増</b>＝今回が自分の店のいつもの平均より 2σ（標準偏差の2倍）以上多く、かつ ¥20,000 以上。</li>
@@ -287,10 +287,10 @@ function refreshReportSel(){
   const sel=$("#reportSel");
   if(!list.length){sel.innerHTML="";$("#reportBox").classList.add("hidden");return}
   $("#reportBox").classList.remove("hidden");
-  sel.innerHTML=list.map((x,i)=>`<option value="${esc(x.id)}">${fmtD(new Date(x.rdate))} 作成${i===0?"（最新）":""}${x.shared?"　共有":"　このブラウザだけ"}　${esc(x.fname)}</option>`).join("");
+  sel.innerHTML=list.map((x,i)=>`<option value="${esc(x.id)}">${fmtD(new Date(x.rdate))} 作成のレポート${i===0?"（最新）":""}</option>`).join("");
   if(CUR) sel.value=CUR;
   const cur=list.find(x=>x.id===CUR);
-  $("#delReport").classList.toggle("hidden",!cur||!!cur.shared);
+  $("#delReport").classList.add("hidden");
 }
 function openReport(id){
   const rep=allReports().find(x=>x.id===id); if(!rep) return false;
@@ -402,7 +402,7 @@ function render(){
   drop.querySelector("strong").textContent="別のファイルを読み込む（ドラッグ または クリック）";
   refreshReportSel();
   $("#saveMsg").textContent="";
-  $("#mFile").textContent="ファイル："+DATA.file;
+  $("#mFile").textContent="";
   $("#mDate").textContent="レポート作成日："+fmtD(DATA.rdate);
   $("#mCount").textContent="店舗数："+DATA.stores.length;
   renderKpis(); renderTable(); renderMatrix(); renderAnalysis();
@@ -895,8 +895,7 @@ $("#exportBtn").onclick=async()=>{
     $("#lockBox").classList.remove("hidden");
     // 共有データを開く前でも、このブラウザに保存したものは見られる
   }
-  const list=readStore();
-  if(list.length&&openReport(list[0].id)) $("#saveMsg").textContent="保存してあるデータを表示しています。";
+  if(!ENC){$("#err").textContent="データがまだありません。";}
 })();
 })();
 </script>
